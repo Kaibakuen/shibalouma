@@ -1,1 +1,438 @@
 <H1>客途<H1>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>客途 AI 旅伴 - 網頁模擬版</title>
+    <!-- 載入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 載入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* 使用 Inter 字體 */
+        :root { font-family: 'Inter', sans-serif; }
+        /* 模擬 LINE 聊天背景 */
+        body { background-color: #f0f0f0; }
+        #chat-window {
+            background-color: #e5ddd5; /* 輕微的米白色背景 */
+            max-width: 480px;
+            height: 80vh;
+            max-height: 700px;
+            margin: 20px auto;
+            border-radius: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .bot-message {
+            background-color: #ffffff;
+            border-radius: 15px 15px 15px 5px;
+            box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+            max-width: 80%;
+        }
+        .user-message {
+            background-color: #a8e48b; /* LINE 綠 */
+            border-radius: 15px 15px 5px 15px;
+            max-width: 80%;
+        }
+        .flex-card {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            background-color: #ffffff;
+            border: 1px solid #ddd;
+        }
+        /* 讓 Lucide Icon 渲染 */
+        [data-lucide] { display: inline-block; }
+    </style>
+</head>
+<body class="p-4 flex flex-col items-center justify-center min-h-screen">
+
+    <div id="chat-window">
+        <!-- Chat Header -->
+        <div class="p-4 bg-green-700 text-white shadow-md flex items-center justify-center rounded-t-xl">
+            <i data-lucide="map-pin" class="w-5 h-5 mr-2"></i>
+            <h1 class="text-xl font-bold">客途 AI 旅伴 - 小阿客</h1>
+        </div>
+
+        <!-- Messages Container -->
+        <div id="messages" class="flex-1 p-4 overflow-y-auto space-y-4">
+            <!-- Initial Message Placeholder -->
+        </div>
+
+        <!-- Input Area (Rich Menu & Text Input Simulation) -->
+        <div id="input-area" class="p-4 bg-gray-100 border-t border-gray-300">
+            <div id="rich-menu-sim" class="flex justify-center space-x-2 mb-3">
+                <button onclick="handleMessage('我想規劃行程')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
+                    <i data-lucide="route" class="w-3 h-3 inline-block"></i> 直接規劃
+                </button>
+                <button onclick="handleMessage('重新測驗')" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
+                    <i data-lucide="list-checks" class="w-3 h-3 inline-block"></i> 開始測驗
+                </button>
+            </div>
+            <div class="flex">
+                <input type="text" id="user-input" placeholder="輸入您的旅遊需求..." class="flex-1 p-2 border border-gray-300 rounded-l-lg focus:outline-none" onkeyup="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()" class="bg-green-500 hover:bg-green-600 text-white px-4 rounded-r-lg shadow-md transition duration-200">
+                    <i data-lucide="send" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心數據結構 (來自操作手冊與 Python 檔案) ---
+
+        const USER_STATUS_DB = {};
+        const DEFAULT_USER_ID = "web_user_123";
+        const messagesContainer = document.getElementById('messages');
+        const userInput = document.getElementById('user-input');
+
+        const PREFERENCE_DIMENSIONS = {
+            "Culture": 0, "Outdoor": 0, "Pace": 0, "LowCarbon": 0,
+            "Family": 0, "Accessibility": 0, "CultureDepth": 0,
+            "Indoor": 0, "RiskAversion": 0
+        };
+
+        const QUIZ_QUESTIONS = {
+            1: {
+                "text": "Q1: 當您抵達一個陌生的客庄小鎮，會先被什麼吸引？",
+                "options": [
+                    { label: "A: 廟宇古蹟或歷史導覽牌", val: "+3Culture,+2CultureDepth" },
+                    { label: "B: 遠處的山嵐與步道指標", val: "+3Outdoor,+1Pace" },
+                    { label: "C: 地方媽媽聚集的小吃攤或咖啡店", val: "+3Pace,+1Indoor" },
+                ]
+            },
+            2: {
+                "text": "Q2: 旅途中如果突然下起大雨，您傾向怎麼做？",
+                "options": [
+                    { label: "A: 找最近的室內景點（如博物館、工藝坊）避雨", val: "+3Indoor,+2RiskAversion" },
+                    { label: "B: 躲進咖啡館，邊等雨停邊規劃備案", val: "+2Pace,-1Outdoor" },
+                    { label: "C: 穿上雨衣，繼續完成原訂的戶外行程", val: "+3Outdoor,-3RiskAversion" },
+                ]
+            },
+            3: {
+                "text": "Q3: 規劃交通時，您最重視的是？",
+                "options": [
+                    { label: "A: 舒適和空間，適合全家老小或行李", val: "+3Family,+2Accessibility" },
+                    { label: "B: 能夠減少碳排放，搭乘公共運輸", val: "+3LowCarbon,-1Pace" },
+                    { label: "C: 說走就走，機動性最高的自駕方式", val: "-3LowCarbon,+2Pace" },
+                ]
+            }
+        };
+        const TOTAL_QUIZ_STEPS = Object.keys(QUIZ_QUESTIONS).length;
+
+        // --- 核心邏輯函數 ---
+
+        function getUserState(userId) {
+            if (!USER_STATUS_DB[userId]) {
+                USER_STATUS_DB[userId] = {
+                    "quiz_step": 0,
+                    "preferences": { ...PREFERENCE_DIMENSIONS }
+                };
+            }
+            return USER_STATUS_DB[userId];
+        }
+
+        function updatePreferenceVector(userId, valString) {
+            const state = getUserState(userId);
+            
+            // 解析 "+3Culture,+2CultureDepth" 這樣的字串
+            valString.split(',').forEach(item => {
+                if (!item) return;
+                
+                // 提取數值和維度名稱
+                const value = parseInt(item.substring(0, item.length - 1));
+                const dimension = item.slice(item.length - 1); // 由於 JS parseInt 會處理符號，這裡簡化
+                
+                // 修正：Python 範例中的維度名稱是整個單字 (e.g., Culture)，不是單一字母。
+                // 重新解析：+3Culture
+                const matches = item.match(/([+-]\d+)([A-Za-z]+)/);
+                if (matches && matches.length === 3) {
+                    const val = parseInt(matches[1]);
+                    const dim = matches[2];
+                    
+                    if (dim in state.preferences) {
+                        state.preferences[dim] += val;
+                    }
+                }
+            });
+
+            console.log(`User ${userId} preferences updated:`, state.preferences);
+            return state.preferences;
+        }
+
+        // --- 訊息 UI 函數 ---
+
+        function addMessage(type, contentHTML, isQuiz = false) {
+            const isBot = (type === 'bot' || type === 'quiz');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${isBot ? 'justify-start' : 'justify-end'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = `p-3 ${isBot ? 'bot-message' : 'user-message'}`;
+
+            if (isQuiz) {
+                // 針對測驗題目的特殊樣式
+                contentDiv.classList.add('flex-card', 'bg-white', 'p-4', 'shadow-lg', 'text-gray-800');
+            } else {
+                contentDiv.innerHTML = contentHTML;
+            }
+
+            if (isBot && !isQuiz) {
+                // 簡單 bot 訊息
+                contentDiv.innerHTML = `<i data-lucide="bot" class="w-4 h-4 mr-1 inline-block text-green-700"></i> ${contentHTML}`;
+            } else if (!isBot) {
+                // 用戶訊息
+                contentDiv.innerHTML = contentHTML;
+            }
+
+            if (isQuiz) {
+                // 測驗內容需要更複雜的結構
+                contentDiv.innerHTML = contentHTML;
+            }
+
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            
+            // 重新渲染 Lucide 圖標
+            lucide.createIcons();
+            
+            // 自動滾動到底部
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // --- 測驗 UI 函數 ---
+
+        function createQuizMessage(questionData, currentStep) {
+            const q = questionData.text;
+            const options = questionData.options;
+            
+            let quizHTML = `
+                <div class="text-xs text-gray-500 mb-2">客途 AI 旅伴 - 偏好測驗 (第 ${currentStep}/${TOTAL_QUIZ_STEPS} 題)</div>
+                <div class="text-lg font-bold text-green-700 mb-3">${q}</div>
+                <div class="space-y-2">
+            `;
+
+            options.forEach(option => {
+                const nextStep = currentStep + 1;
+                // data 格式模仿 LINE Postback: action=next_quiz&step=4&val=+3Culture,+2CultureDepth
+                const postbackData = `action=next_quiz&step=${nextStep}&val=${option.val}`;
+                
+                quizHTML += `
+                    <button onclick="handlePostback('${postbackData}')" 
+                            class="w-full text-left p-3 bg-gray-50 hover:bg-green-100 border border-green-200 rounded-lg text-sm transition duration-150">
+                        ${option.label}
+                    </button>
+                `;
+            });
+
+            quizHTML += `</div>`;
+            
+            addMessage('quiz', quizHTML, true);
+        }
+
+        // --- 行程模擬 LLM 函數 ---
+
+        function simulateLLMItinerary(userQuery, preferenceVector) {
+            // 模擬 LLM 輸出的 JSON 格式
+            const C = preferenceVector['Culture'];
+            const P = preferenceVector['Pace'];
+            const L = preferenceVector['LowCarbon'];
+            const O = preferenceVector['Outdoor'];
+
+            const title = C > O ? "文化深度客庄漫遊" : O > C ? "山林步道輕探險" : "均衡體驗之旅";
+            const theme = P > 1 ? "慢步調, 深度體驗" : "快速遊覽, 多點打卡";
+            
+            const itinerary_json = {
+                "title": title,
+                "theme": theme,
+                "recommendation_reason": `小阿客已分析您的偏好（文化: ${C}, 步調: ${P}, 低碳: ${L}）。根據您的需求「${userQuery}」，行程聚焦於${title}。`,
+                "itinerary": [
+                    {
+                        "time": "10:00 - 11:30",
+                        "name": "北埔慈天宮",
+                        "description": "客庄信仰中心，擁有豐富的歷史雕刻和故事。符合您的文化深度需求。",
+                        "location_url": "https://maps.app.goo.gl/example1"
+                    },
+                    {
+                        "time": "11:30 - 13:00",
+                        "name": "北埔老街 (午餐與擂茶)",
+                        "description": "品嚐客家傳統美食。此處步調相對緩慢，適合深度體驗。",
+                        "location_url": "https://maps.app.goo.gl/example2"
+                    },
+                    {
+                        "time": "13:30 - 15:30",
+                        "name": L > 1 ? "大坪溪步道 (低碳體驗)" : "峨眉湖畔 (輕鬆漫步)",
+                        "description": L > 1 ? "一段短程步道，讓您親近自然，滿足低碳偏好。" : "輕鬆欣賞湖光山色，適合慢活。",
+                        "location_url": "https://maps.app.goo.gl/example3"
+                    }
+                ],
+                "carbon_footprint_estimate": `${(10 - L).toFixed(1)} kg CO2e`
+            };
+
+            return itinerary_json;
+        }
+
+
+        // --- 行程卡片 UI 函數 ---
+        function createItineraryCard(itineraryJson) {
+            let itineraryItemsHTML = '';
+            itineraryJson.itinerary.forEach(item => {
+                itineraryItemsHTML += `
+                    <div class="py-2 border-b border-gray-100 last:border-b-0">
+                        <div class="flex items-center text-sm font-semibold text-gray-700 mb-1">
+                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-green-600"></i>
+                            ${item.time} - ${item.name}
+                        </div>
+                        <p class="text-xs text-gray-500 pl-6">${item.description}</p>
+                    </div>
+                `;
+            });
+            
+            const cardHTML = `
+                <div class="flex-card w-full max-w-sm text-gray-800">
+                    <div class="p-3 bg-green-700 text-white rounded-t-xl">
+                        <div class="text-xl font-bold">${itineraryJson.title}</div>
+                        <div class="text-xs opacity-80 mt-1">主題: ${itineraryJson.theme}</div>
+                    </div>
+                    
+                    <div class="p-4 space-y-3">
+                        <div class="border-b pb-3">
+                            <div class="text-xs font-semibold text-green-700 mb-1">小阿客推薦理由:</div>
+                            <p class="text-sm">${itineraryJson.recommendation_reason}</p>
+                        </div>
+                        
+                        <div class="text-sm font-bold mt-3">【詳細行程】</div>
+                        ${itineraryItemsHTML}
+
+                        <div class="text-right text-xs text-indigo-500 font-medium pt-2">
+                            低碳估算: ${itineraryJson.carbon_footprint_estimate}
+                        </div>
+                    </div>
+
+                    <div class="flex p-3 border-t bg-gray-50">
+                        <a href="${itineraryJson.itinerary[0].location_url}" target="_blank" class="flex-1 text-center py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition duration-200 shadow-md mr-2">
+                            <i data-lucide="map" class="w-4 h-4 inline-block mr-1"></i> Google 地圖導航
+                        </a>
+                        <button onclick="handlePostback('action=get_rain_plan')" class="flex-1 text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
+                            <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
+                        </button>
+                    </div>
+                </div>
+            `;
+            addMessage('bot', cardHTML, true);
+        }
+
+        // --- 事件處理 ---
+
+        function handlePostback(data) {
+            const params = new URLSearchParams(data.replace(/&/g, '&amp;').replace(/=/g, '='));
+            const action = params.get('action');
+            const userState = getUserState(DEFAULT_USER_ID);
+
+            if (action === 'next_quiz') {
+                const nextStep = parseInt(params.get('step'));
+                const valString = params.get('val');
+                
+                // 1. 累積權重
+                updatePreferenceVector(DEFAULT_USER_ID, valString);
+                userState.quiz_step = nextStep - 1; // 更新到當前已完成的步驟
+
+                if (nextStep <= TOTAL_QUIZ_STEPS) {
+                    // 2. 發送下一題
+                    const quizData = QUIZ_QUESTIONS[nextStep];
+                    createQuizMessage(quizData, nextStep);
+                    userState.quiz_step = nextStep;
+                } else {
+                    // 3. 測驗結束
+                    userState.quiz_step = TOTAL_QUIZ_STEPS;
+                    const finalPrefs = userState.preferences;
+                    const summary = Object.entries(finalPrefs).filter(([k, v]) => v !== 0).map(([k, v]) => `${k}: ${v}`).join(", ");
+                    
+                    addMessage('bot', 
+                        `太棒了！您已完成測驗。小阿客已儲存您的旅遊偏好，總結：<br><b>${summary}</b>。<br><br>現在，請在下方輸入框直接輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』)，小阿客會立即為您規劃最客製化的客庄行程！`
+                    );
+                }
+
+            } else if (action === 'get_rain_plan') {
+                addMessage('bot', '好的，收到雨天備案請求！小阿客將針對您目前的行程，呼叫 AI 推薦最適合的室內景點。');
+            }
+        }
+
+        function handleMessage(text) {
+            const userState = getUserState(DEFAULT_USER_ID);
+            
+            // 模擬用戶發送訊息
+            addMessage('user', text);
+            
+            if (text === "重新測驗") {
+                userState.quiz_step = 0;
+                userState.preferences = { ...PREFERENCE_DIMENSIONS };
+            }
+
+            if (text === "我想規劃行程" || userState.quiz_step === 0) {
+                // 檢查是否已完成測驗
+                if (userState.quiz_step >= TOTAL_QUIZ_STEPS) {
+                    addMessage('bot', "好的，小阿客已讀取您的偏好。請直接輸入您的旅遊需求，例如：『想去北埔，文化歷史，半日遊』");
+                    return;
+                }
+                
+                // 啟動測驗
+                const quizData = QUIZ_QUESTIONS[1];
+                createQuizMessage(quizData, 1);
+                userState.quiz_step = 1;
+                return;
+            }
+
+            // 處理行程規劃需求
+            if (userState.quiz_step >= TOTAL_QUIZ_STEPS) {
+                try {
+                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-green-700"></i> 小阿客正在根據您的偏好和「${text}」規劃客製化行程中... 請稍候。`);
+                    
+                    // 模擬 1.5 秒延遲
+                    setTimeout(() => {
+                        const preferenceVector = userState.preferences;
+                        const itineraryJson = simulateLLMItinerary(text, preferenceVector);
+                        createItineraryCard(itineraryJson);
+                    }, 1500);
+
+                } catch (e) {
+                    addMessage('bot', `對不起，行程規劃系統出現錯誤: ${e.message}`);
+                }
+            } else {
+                addMessage('bot', "請先點擊按鈕來完成偏好設定喔！");
+            }
+        }
+
+        function sendMessage() {
+            const text = userInput.value.trim();
+            if (text) {
+                handleMessage(text);
+                userInput.value = '';
+            }
+        }
+
+        // --- 網頁載入初始化 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // 初始問候語
+            addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
+                                為了給您最貼心的台三線客庄行程建議，請先完成偏好測驗。`);
+            
+            // 延遲後顯示開始按鈕 (模擬 Rich Menu 互動)
+            setTimeout(() => {
+                const quizStartButton = `
+                    <div class="w-full text-center">
+                        <button onclick="handleMessage('重新測驗')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
+                            點我開始測驗！
+                        </button>
+                    </div>
+                `;
+                addMessage('bot', quizStartButton, true);
+            }, 500);
+        });
+
+    </script>
+</body>
+</html>
