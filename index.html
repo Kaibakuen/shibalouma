@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>客途 AI 旅伴 </title>
+    <title>客途 AI 旅伴 - 台三線景點規劃版</title>
     <!-- 載入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- 載入 Lucide Icons -->
@@ -28,7 +28,9 @@
         .bot-message {
             background-color: #ffffff;
             border-radius: 15px 15px 15px 5px;
-            max-width: 85%; /* 增加寬度以容納卡片 */
+            max-width: 90%; /* 確保內容能完整顯示 */
+            /* 讓 bot-message 容器本身具有彈性，以包裹圖片 */
+            display: inline-block; 
         }
         .user-message {
             background-color: #a8e48b; /* LINE 綠 */
@@ -67,7 +69,7 @@
                     <i data-lucide="route" class="w-3 h-3 inline-block"></i> 直接規劃
                 </button>
                 <button onclick="handleMessage('重新測驗')" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
-                    <i data-lucide="list-checks" class="w-3 h-3 inline-block"></i> 開始測驗
+                    <i data-lucide="list-checks" class="w-3 h-3 inline-block"></i> 開始問卷
                 </button>
             </div>
             <div class="flex">
@@ -104,89 +106,82 @@
             { id: 6, region: "台中", name: "東勢客家文化園區 (自行車道)", theme: ["LowCarbon", "Outdoor", "Pace"], description: "舊火車站改建，結合鐵道文化與綠色廊道，是單車活動的最佳起點。", map_url: "https://maps.app.goo.gl/Gj8xN4bY5rE2pA3c6" }
         ];
 
-        // 10 題隱晦式人格測驗題目及其向量權重 (不變)
+        // 10 題旅遊偏好問卷及其向量權重
         const QUIZ_QUESTIONS = {
             1: {
-                "text": "Q1: 旅遊結束時，您最想帶回家的紀念品是什麼？",
+                "text": "Q1: 旅程規劃時，比起聊天，您更喜歡安靜做自己的事嗎？",
                 "options": [
-                    { label: "A: 客庄老店的手工藝品或陶瓷", val: "+3Culture,+2CultureDepth,+1Pace" },
-                    { label: "B: 沿途風景拍下的專業照片", val: "+3Outdoor,-1CultureDepth,-1Pace" },
-                    { label: "C: 當地特有的美味零食或特產", val: "+2Pace,+1Indoor,-1Culture" },
+                    { label: "A: 是的，我需要時間獨自沉澱或思考", val: "+3Indoor,+2Pace,-1Outdoor" },
+                    { label: "B: 否，我喜歡與旅伴討論，共同決定", val: "+3Outdoor,-1Indoor,-2Pace" },
                 ]
             },
             2: {
-                "text": "Q2: 您的手機裡，哪類App最常用？",
+                "text": "Q2: 您覺得能睡飽，比早起趕行程、看美景更重要嗎？",
                 "options": [
-                    { label: "A: 閱讀新聞、電子書或知識型App", val: "+3CultureDepth,+1Culture,+1Pace" },
-                    { label: "B: 運動追蹤、地圖導航或天氣預報", val: "+3Outdoor,+2RiskAversion,-1Indoor" },
-                    { label: "C: 社交媒體、美食評論或購物App", val: "+2Pace,-1CultureDepth,+1Indoor" },
+                    { label: "A: 是的，休息是旅行的重點", val: "+3Pace,+2Indoor,-2Outdoor" },
+                    { label: "B: 否，我願意早起把握時間多玩一點", val: "-3Pace,+2Outdoor,+2RiskAversion" },
                 ]
             },
             3: {
-                "text": "Q3: 在一個週末，您會如何安排您的時間？",
+                "text": "Q3: 在人多熱鬧的老街或聚會場所，您會感到活力充沛嗎？",
                 "options": [
-                    { label: "A: 密集安排多項活動，把時間填滿", val: "-3Pace,-2RiskAversion" },
-                    { label: "B: 彈性安排，留有大量空白時間休息", val: "+3Pace,+2RiskAversion" },
+                    { label: "A: 是的，我享受社交和人群的熱鬧", val: "-3Indoor,+2Culture,-1Pace" },
+                    { label: "B: 否，我更喜歡安靜的自然或歷史景點", val: "+3Indoor,+2Pace,-2Culture" },
                 ]
             },
             4: {
-                "text": "Q4: 您的理想住所是什麼樣的？",
+                "text": "Q4: 您對住宿環境有潔癖，或是在意舒適度嗎？",
                 "options": [
-                    { label: "A: 靠近公園或山區，陽光充足的郊區房", val: "+3Outdoor,+2LowCarbon" },
-                    { label: "B: 市中心，生活機能方便的高樓層公寓", val: "-3LowCarbon,-2Outdoor,+2Indoor" },
-                    { label: "C: 充滿歷史感，裝潢簡樸的老式平房", val: "+3Culture,+1CultureDepth,+1Pace" },
+                    { label: "A: 是的，住宿的品質會影響我的心情", val: "+3Indoor,+2RiskAversion,-1LowCarbon" },
+                    { label: "B: 否，只要有基本功能，便宜即可", val: "-3Indoor,-2RiskAversion,+1LowCarbon" },
                 ]
             },
             5: {
-                "text": "Q5: 規劃行程時，您會先考量什麼？",
+                "text": "Q5: 您喜歡走路，長時間的徒步探索不是問題嗎？",
                 "options": [
-                    { label: "A: 餐廳或活動是否有兒童或長者友善設施", val: "+4Family,+4Accessibility" },
-                    { label: "B: 交通接駁是否方便，是否會浪費時間", val: "-3LowCarbon,-2Pace" },
-                    { label: "C: 該地點的歷史評價和獨特性", val: "+3Culture,+1CultureDepth" },
+                    { label: "A: 是的，我喜歡用雙腳深度探索", val: "+4Outdoor,+3LowCarbon,+2CultureDepth" },
+                    { label: "B: 否，我偏好搭乘交通工具或短程移動", val: "-3Outdoor,-2LowCarbon,+2Pace" },
                 ]
             },
             6: {
-                "text": "Q6: 旅途中遇到突發狀況，您傾向？",
+                "text": "Q6: 規劃行程時，您會先考量是否有兒童或長者友善設施嗎？",
                 "options": [
-                    { label: "A: 堅持按原計畫走，相信問題會解決", val: "-3RiskAversion" },
-                    { label: "B: 立即啟動備用方案，避免任何風險", val: "+3RiskAversion,+2Indoor" },
-                    { label: "C: 詢問當地人，隨機應變找到新樂趣", val: "+2Outdoor,-1RiskAversion" },
+                    { label: "A: 是的，所有人的舒適度是我的首要考量", val: "+4Family,+4Accessibility,+2RiskAversion" },
+                    { label: "B: 否，我以景點的獨特性和個人興趣為主", val: "-3Family,-3Accessibility,-1RiskAversion" },
                 ]
             },
             7: {
-                "text": "Q7: 您對新知識的獲取方式是？",
+                "text": "Q7: 旅程中遇到突發狀況，您傾向立即啟動備用方案，避免任何風險嗎？",
                 "options": [
-                    { label: "A: 喜歡閱讀深度資料、書籍或紀錄片", val: "+3CultureDepth,+2Culture" },
-                    { label: "B: 快速瀏覽摘要、看影片精華", val: "-2CultureDepth,-1Pace" },
+                    { label: "A: 是的，我討厭行程被打亂", val: "+4RiskAversion,+2Indoor,-2Pace" },
+                    { label: "B: 否，我願意隨機應變，甚至接受意外的驚喜", val: "-4RiskAversion,+2Outdoor,+2Pace" },
                 ]
             },
             8: {
-                "text": "Q8: 徒步或騎單車，您更喜歡？",
+                "text": "Q8: 您會設定旅程預算並且實際控管，捨不得花太多錢享受美食嗎？",
                 "options": [
-                    { label: "A: 徒步，能緩慢感受周遭一切", val: "+3Pace,+2Outdoor,+2LowCarbon" },
-                    { label: "B: 騎單車，能更快到達更多地方", val: "-2Pace,+3Outdoor,+2LowCarbon" },
+                    { label: "A: 是的，控制預算比美食享受重要", val: "+3LowCarbon,-3Indoor" },
+                    { label: "B: 否，我蠻捨得花錢享受美食的", val: "-3LowCarbon,+3Indoor" },
                 ]
             },
             9: {
                 "text": "Q9: 哪種客庄體驗對您更有吸引力？",
                 "options": [
-                    { label: "A: 在客家廚房學做米食，享受室內時光", val: "+3Indoor,+2Culture" },
-                    { label: "B: 採茶或農場體驗，親手接觸土地", val: "+3Outdoor,+1LowCarbon" },
-                    { label: "C: 參觀客家宗祠，聽宗族遷徙史", val: "+3CultureDepth,+3Culture" },
+                    { label: "A: 參觀客家宗祠，聽宗族遷徙的深度歷史", val: "+4CultureDepth,+3Culture" },
+                    { label: "B: 採茶、農場體驗，親手接觸土地與自然", val: "+4Outdoor,+2LowCarbon" },
                 ]
             },
             10: {
-                "text": "Q10: 您的行李箱通常是什麼狀態？",
+                "text": "Q10: 您喜歡按照規劃好的行程走，不喜歡旅途中變動嗎？",
                 "options": [
-                    { label: "A: 精簡輕便，只帶必需品", val: "-3RiskAversion,-1Indoor" },
-                    { label: "B: 井然有序，各種備用物品俱全", val: "+3RiskAversion,+1Indoor" },
-                    { label: "C: 裝滿戶外裝備和舒適的衣物", val: "+3Outdoor" },
+                    { label: "A: 是的，規劃好的路線最有效率", val: "-3Pace,-2RiskAversion,+2CultureDepth" },
+                    { label: "B: 否，我喜歡彈性、即興，隨時改變方向", val: "+3Pace,+2RiskAversion,-2CultureDepth" },
                 ]
             },
         };
         const TOTAL_QUIZ_STEPS = Object.keys(QUIZ_QUESTIONS).length; // 總共有 10 題
 
-        // --- 核心邏輯函數 ---
+        // --- 核心邏輯函數 (保持不變) ---
 
         function getUserState(userId) {
             if (!USER_STATUS_DB[userId]) {
@@ -198,18 +193,13 @@
             return USER_STATUS_DB[userId];
         }
 
-        /**
-         * 根據測驗選項更新用戶的旅遊偏好向量。
-         * @param {string} userId - 用戶 ID。
-         * @param {string | null} valString - 包含權重分數的字串，例如 "+3Culture,+2CultureDepth"。
-         */
         function updatePreferenceVector(userId, valString) {
             const state = getUserState(userId);
             
             (valString || "").split(',').forEach(item => { 
                 if (!item) return;
                 
-                const matches = item.match(/([+-]\d+)([A-Za-z]+)/);
+                const matches = item.match(/([+-]\d+)([A-Za-z]+)/                );
                 if (matches && matches.length === 3) {
                     const val = parseInt(matches[1]);
                     const dim = matches[2];
@@ -222,7 +212,7 @@
             return state.preferences;
         }
 
-        // --- 訊息 UI 函數 ---
+        // --- 訊息 UI 函數 (微調 bot-message 結構以確保圖片顯示) ---
 
         function addMessage(type, contentHTML, isQuiz = false) {
             const isBot = (type === 'bot' || type === 'quiz');
@@ -230,11 +220,13 @@
             messageDiv.className = `flex ${isBot ? 'justify-start' : 'justify-end'}`;
             
             const contentDiv = document.createElement('div');
-            contentDiv.className = `p-3 ${isBot ? 'bot-message' : 'user-message'}`;
+            // 讓 bot-message 容器自適應內容寬度
+            contentDiv.className = `p-3 ${isBot ? 'bot-message' : 'user-message'}`; 
 
             if (isQuiz) {
                 // 測驗訊息使用特殊的卡片樣式
                 contentDiv.classList.add('flex-card', 'bg-white', 'p-4', 'shadow-lg', 'text-gray-800');
+                contentDiv.classList.remove('p-3'); // 移除標準 padding
             } 
 
             if (isBot && !isQuiz) {
@@ -253,10 +245,10 @@
             
             lucide.createIcons();
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            return messageDiv.querySelector('div:last-child'); // Return the actual message content div
+            return contentDiv; // Return the actual message content div
         }
 
-        // --- 測驗 UI 函數 ---
+        // --- 測驗 UI 函數 (保持不變) ---
 
         function createQuizMessage(questionData, currentStep) {
             const q = questionData.text;
@@ -286,18 +278,11 @@
             addMessage('quiz', quizHTML, true);
         }
         
-        /**
-         * 根據用戶偏好向量和查詢，從真實景點資料庫中選擇景點
-         * @param {string} userQuery - 用戶輸入的查詢 (e.g., "新竹峨眉，戶外活動")
-         * @param {Object} preferenceVector - 偏好向量
-         * @returns {Object} 包含規劃結果的 JSON
-         */
+        // --- 行程規劃函數 (保持不變) ---
         function generateHakkaItinerary(userQuery, preferenceVector) {
             const query = userQuery.toLowerCase();
-            // 找出分數最高的偏好作為主題核心
             const topPreference = Object.keys(preferenceVector).reduce((a, b) => preferenceVector[a] > preferenceVector[b] ? a : b);
 
-            // 1. 篩選景點 (優先考慮地區關鍵字)
             let candidates = HAKKA_ATTRACTIONS;
             let regionMatch = '';
 
@@ -310,16 +295,12 @@
                 candidates = candidates.filter(att => att.region === regionMatch);
             }
             
-            // 2. 選擇最佳景點 (根據最高偏好)
-            // 找出最匹配 topPreference 的景點，若無地區限定則從所有景點中找
             let bestAttraction = candidates.sort((a, b) => {
-                // 計算景點與用戶最高偏好維度的匹配分數
                 const scoreA = a.theme.includes(topPreference) ? 1 : 0;
                 const scoreB = b.theme.includes(topPreference) ? 1 : 0;
-                return scoreB - scoreA; // 降冪排列 (分數高的優先)
-            })[0] || candidates[Math.floor(Math.random() * candidates.length)]; // 若無匹配，隨機選一個
+                return scoreB - scoreA; 
+            })[0] || candidates[Math.floor(Math.random() * candidates.length)]; 
 
-            // 3. 判斷主題與步調
             const C = preferenceVector['Culture'];
             const O = preferenceVector['Outdoor'];
             const P = preferenceVector['Pace'];
@@ -361,9 +342,7 @@
                 "carbon_footprint_estimate": `${(12 - preferenceVector['LowCarbon']).toFixed(1)} kg CO2e`
             };
         }
-
-
-        // --- 行程卡片 UI 函數 (不變) ---
+        
         function createItineraryCard(itineraryJson) {
             let itineraryItemsHTML = '';
             itineraryJson.itinerary.forEach(item => {
@@ -467,83 +446,65 @@
 
         async function generatePersonalityImageAndMessage(finalPrefs) {
             const score = (dim) => finalPrefs[dim] || 0;
-            const C = score('Culture');
-            const O = score('Outdoor');
-            const I = score('Indoor');
-            const P = score('Pace');
-            const F = score('Family');
-            const A = score('Accessibility');
 
-            let personalityDescription = "您的核心旅遊人格是：**";
-            let itineraryFocus = "因此，小阿客建議您嘗試：";
-            let imagePromptEnglish = ""; // For the AI Image Generator
-            let mainPersonality = ""; // For UI display
+            let mainPersonality = ""; 
+            let imagePromptEnglish = ""; 
+            let itineraryFocus = ""; 
+            let traitDescription = ""; // 新增特質描述
 
-            // 1. 核心人格判斷
-            if (O > C + 1 && O > I + 1 && O > 3) {
-                mainPersonality = "天生的探險家";
-                personalityDescription += "天生的探險家 (The Explorer) 🏞️**";
-                itineraryFocus += " **山林步道與自然療癒** 的戶外主題行程";
-                imagePromptEnglish = "A person hiking alone on a lush green mountain path, sun shining, feeling adventurous, watercolor style, Hakka region of Taiwan.";
-            } else if (C > O + 1 && C > I + 1 && C > 3) {
-                mainPersonality = "深度文史探索者";
-                personalityDescription += "深度文史探索者 (The Historian) 📚**";
-                itineraryFocus += " **深度客家文化與歷史導覽** 的文史主題之旅";
-                imagePromptEnglish = "A person studying an ancient Hakka traditional architecture in Taiwan, with a notebook, quiet and focused, cinematic light, digital painting.";
-            } else if (I > O + 1 && I > C + 1 && I > 3) {
-                mainPersonality = "精緻內斂鑑賞家";
-                personalityDescription += "精緻內斂鑑賞家 (The Connoisseur) ☕️**";
-                itineraryFocus += " **室內手作體驗與客庄慢食** 的悠閒主題";
-                imagePromptEnglish = "A cozy indoor scene of a person enjoying a cup of traditional Hakka Lei Cha (ground tea), soft ambient light, focus on the details, warm colors, photograph style.";
+            // --- 新增的旅型人格判斷邏輯 ---
+            
+            // 1. 判斷核心維度
+            const outdoorScore = score('Outdoor') - score('Indoor');
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5); 
+            const focusScore = score('CultureDepth') * 2 + score('Culture');
+            
+            // 2. 旅型人格分類
+            
+            if (focusScore > 8 && outdoorScore > 0) {
+                // 高度文化深度 + 偏好戶外/探索 > 精緻探索家
+                mainPersonality = "精緻探索家 (The Cultured Explorer)";
+                imagePromptEnglish = "A person carefully examining a complex map near a historic Hakka temple in Taiwan, carrying a small, neat backpack. Detailed, cinematic, photo-realistic.";
+                traitDescription = "您的基因：**內斂、規劃、知識享受、探索**。您重視旅程的知識性與效率，喜歡深入挖掘文化，並願意花費時間與精力去探索獨特景點。";
+                itineraryFocus = "【精緻探索家】您需要結合**歷史古蹟深度導覽**與**高質量戶外體驗**。您的行程應包含明確的學習目標和高效率的移動，專注於質量而非數量。";
+            } else if (outdoorScore < -4 && score('Pace') > 4) {
+                // 強烈偏好室內 + 慢活步調 > 悠活度假客
+                mainPersonality = "悠活度假客 (The Relaxed Retreat)";
+                imagePromptEnglish = "A cozy indoor scene of a person reading a book and sipping tea in a comfortable chair by a window overlooking a misty, green Hakka village, soft ambient lighting, warm and peaceful, photograph style.";
+                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，只要能讓身心放鬆，行程規劃的細節可完全交由他人處理，住宿與美食的品質對您很重要。";
+                itineraryFocus = "【悠活度假客】您應選擇主打**高品質客庄旅宿**、**在地客家慢食**、**室內手作體驗**。您的旅行哲學是『慢下來，享受當下』。";
+            } else if (outdoorScore > 4 && paceScore < -2) {
+                // 強烈偏好戶外 + 緊湊/低Pace > 行動拓荒者
+                mainPersonality = "行動拓荒者 (The Action Pioneer)";
+                imagePromptEnglish = "A person standing triumphantly on a mountain peak in the Hakka region, view of rolling hills in the background, high energy, dramatic wide-angle shot, vibrant colors, photorealistic.";
+                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性，喜歡用雙腳丈量土地。";
+                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡，享受體能上的滿足感。";
             } else {
-                mainPersonality = "均衡多元旅人";
-                personalityDescription += "均衡多元旅人 (The Balancer) 🌱**";
-                itineraryFocus += " 結合 **老街巡禮與近郊單車** 的平衡行程";
-                imagePromptEnglish = "A scenic shot of a person cycling near a traditional Hakka old street and green rice fields in Taiwan, sunny day, vibrant, photorealistic.";
+                // 其他均衡類型 (常伴隨高 Family/Accessibility) > 平和優遊家
+                mainPersonality = "平和優遊家 (The Harmonious Wanderer)";
+                imagePromptEnglish = "A family (multi-generational) walking together on a wide, accessible path in a scenic park, sunny day, focus on ease and happiness, bright and cheerful, illustration style.";
+                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境，是團隊中最好的協調者與隨行者。";
+                itineraryFocus = "【平和優遊家】您適合選擇**交通便利、配套設施完善**的景點（如大型客家文化園區、易達老街），確保行程流暢且所有旅伴都能舒適參與。";
             }
             
-            personalityDescription += "。";
-            itineraryFocus += "。";
-            
-            // 2. 步調與風險判斷
-            let paceDescription = "";
-            if (P > 2) {
-                paceDescription = "您的步調中帶著**悠然的從容**，享受慢下來的深度體驗。";
-            } else if (P < -2) {
-                paceDescription = "您追求**高效、緊湊且目標明確**的行程，偏好一次走訪多個景點。";
-            }
-            
-            // 3. 特殊考量
-            let specialConsideration = "";
-            if (F > 3 || A > 3) {
-                specialConsideration = "此外，您更看重旅程的**共享與圓滿**，會優先考慮所有同行者的舒適與便利性 (親子/無障礙)。";
-            }
-
             // 組合最終訊息 (載入前部分)
-            let finalMessageContent = `恭喜您！您已完成 **10 題客庄旅遊問卷**。<br><br>`;
-            finalMessageContent += personalityDescription + `<br>`;
-            if (paceDescription) {
-                finalMessageContent += paceDescription + `<br>`;
-            }
-            if (specialConsideration) {
-                finalMessageContent += specialConsideration + `<br>`;
-            }
-            finalMessageContent += `<br>小阿客為您描繪的旅遊心境圖：<br>`;
-
-            // Add loading message for the image
-            const loadingMessageHtml = `
-                ${finalMessageContent}
-                <div id="image-loading-spinner" class="mt-4 p-4 text-center bg-gray-100 rounded-lg text-gray-500">
-                    <i data-lucide="loader" class="w-6 h-6 inline-block animate-spin mr-2 text-green-700"></i>
-                    正在為您的【${mainPersonality}】人格生成專屬意境圖... (約需 10-15 秒)
+            let finalMessageContent = `
+                <div class="w-full text-center p-3">
+                    <div class="text-xl font-bold text-red-600 border-b-2 border-red-600 pb-2 mb-3">您的旅型人格揭曉！</div>
+                    <div class="text-3xl font-extrabold text-green-700 mb-2">${mainPersonality}</div>
+                    <div class="text-sm text-gray-700 font-medium mb-4">${traitDescription}</div>
                 </div>
             `;
-            
+            finalMessageContent += `
+                <div class="p-4 bg-gray-50 rounded-lg w-full">
+                    <i data-lucide="loader" class="w-5 h-5 inline-block animate-spin mr-2 text-green-700"></i>
+                    小阿客正在為您的【${mainPersonality}】旅型人格生成專屬意境圖... (約需 10-15 秒)
+                </div>
+            `;
+
             // Add the loading message to the chat and get its div
             const messageId = `msg-${Date.now()}`;
-            // Add the loading message structure using a unique ID
-            const botMessageDiv = addMessage('bot', `<div id="${messageId}">${loadingMessageHtml}</div>`);
-            const messageContentWrapper = botMessageDiv.parentElement; 
+            const messageContentWrapper = addMessage('bot', `<div id="${messageId}" class="w-full">${finalMessageContent}</div>`);
             
             let imageUrl = null;
             try {
@@ -558,7 +519,8 @@
             // 4. 替換/更新訊息內容
             let imageHtml = '';
             if (imageUrl) {
-                imageHtml = `<div class="mt-4 w-full h-auto max-w-full rounded-lg shadow-xl overflow-hidden">
+                // 修正格式跑掉的問題：確保圖片使用 w-full 且被 bot-message 良好包裹
+                imageHtml = `<div class="mt-4 w-full rounded-lg shadow-xl overflow-hidden">
                                 <img src="${imageUrl}" alt="AI 意境圖: ${mainPersonality}" class="w-full h-auto object-cover">
                             </div>`;
             } else {
@@ -568,19 +530,34 @@
             }
 
             // Final message content with image
-            let finalMessageWithImage = finalMessageContent + imageHtml;
-            finalMessageWithImage += `<br>${itineraryFocus}<br><br>現在請直接輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！`;
+            let finalMessageWithImage = `
+                <div class="p-3 w-full">
+                    <div class="text-xl font-bold text-red-600 border-b-2 border-red-600 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
+                    <div class="text-3xl font-extrabold text-green-700 mb-2 text-center">${mainPersonality}</div>
+                    <div class="text-sm text-gray-700 font-medium mb-4 text-center">${traitDescription}</div>
+                    
+                    ${imageHtml}
+                    
+                    <div class="mt-4 pt-3 border-t border-gray-100">
+                        <div class="text-sm font-semibold text-green-700 mb-1">小阿客的客製化行程建議：</div>
+                        <p class="text-sm text-gray-600">${itineraryFocus}</p>
+                        <p class="mt-3 text-xs text-indigo-500">現在請直接輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
+                    </div>
+                </div>
+            `;
+
 
             // Update the content of the existing message wrapper
             if (messageContentWrapper) {
-                messageContentWrapper.innerHTML = `<i data-lucide="bot" class="w-4 h-4 mr-1 inline-block text-green-700"></i> ${finalMessageWithImage}`;
+                messageContentWrapper.classList.add('p-0'); // 移除外層 padding，讓內層自訂
+                messageContentWrapper.innerHTML = finalMessageWithImage;
                 lucide.createIcons(); // Re-render icons after content change
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }
         }
 
 
-        // --- 事件處理 ---
+        // --- 事件處理 (保持不變) ---
 
         async function handlePostback(data) {
             const params = new URLSearchParams(data);
@@ -624,7 +601,7 @@
             // 模擬用戶發送訊息
             addMessage('user', text);
 
-            const isRestart = text === "重新測驗" || text === "開始測驗";
+            const isRestart = text === "重新測驗" || text === "開始問卷";
             
             // --- 修正 BUG: 確保點擊 '重新測驗' 時能正確啟動測驗 ---
             
@@ -637,12 +614,12 @@
             // Check if quiz needs to be started (step is 0)
             if (userState.quiz_step === 0) {
                 // 讓用戶知道需要先測驗
-                if (text === "我想規劃行程" || (text.includes('規劃行程') && !isRestart)) {
-                    addMessage('bot', "小阿客了解您的需求！請先點擊「開始測驗」，完成 **10 題客庄旅遊問卷**，以獲得最客製化的行程建議。");
+                if (text.includes('規劃行程') && !isRestart) {
+                    addMessage('bot', "小阿客了解您的需求！請先點擊「開始問卷」按鈕，完成 **10 題客庄旅遊問卷**，以獲得最客製化的行程建議。");
                     return; // 提示後不立即啟動，讓用戶自行點擊
-                } else if (!isRestart && !text.includes('規劃行程') && !text.includes('行程')) {
+                } else if (!isRestart && !text.includes('規劃行程')) {
                     // 如果用戶輸入隨意文字，提示他們開始測驗
-                    addMessage('bot', "請先點擊「開始測驗」按鈕，啟動客製化流程。");
+                    addMessage('bot', "請先點擊「開始問卷」按鈕，啟動客製化流程。");
                     return;
                 }
                 
@@ -658,7 +635,7 @@
             // 處理行程規劃需求 (需要先完成測驗)
             if (userState.quiz_step >= TOTAL_QUIZ_STEPS || text.includes('規劃行程') || text.includes('行程')) {
                 try {
-                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-green-700"></i> 小阿客正在根據您的偏好和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
+                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-green-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
                     // 模擬 1.5 秒延遲來模擬 LLM 呼叫時間
                     setTimeout(() => {
