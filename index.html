@@ -39,7 +39,6 @@
             color: #103561; /* 機器人訊息為深藍色文字 */
         }
         .user-message {
-            background-color: #a8e48b; /* LINE 綠 / 改為淺橙色 */
             background-color: #fde68a; /* 淺橙色背景 */
             border-radius: 15px 15px 5px 15px;
             max-width: 80%;
@@ -89,19 +88,10 @@
         </div>
     </div>
 
-    <!-- Firebase SDK 引入 -->
+    <!-- Firebase SDK 引入 (已移除，僅保留核心應用程式邏輯) -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // --- 核心數據結構 (用於儲存用戶狀態與偏好向量) ---
 
-        // 設定 Firebase Debug Log
-        setLogLevel('Debug');
-        
-        // --- 1. 核心數據結構 (用於儲存用戶狀態與偏好向量) ---
-
-        const DEFAULT_USER_ID = "web_user_123";
         const messagesContainer = document.getElementById('messages');
         const userInput = document.getElementById('user-input');
 
@@ -113,62 +103,41 @@
         };
 
         // 狀態管理
-        let app, db, auth;
-        let userId = null;
-        let isAuthReady = false;
         let currentPreferences = { ...PREFERENCE_DIMENSIONS }; // Global state for preferences
         let currentQuizStep = 0; // Global state for quiz step
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // --- Local Storage Ops (取代 Firebase 解決權限問題) ---
 
-        // --- Firebase Paths and Ops ---
-        async function getDocRef() {
-            if (!db || !userId) {
-                throw new Error("Firebase or User ID not initialized.");
-            }
-            // 最終修正的路徑：使用標準 6 段私有路徑 (Collection/Document/Collection/Document/Collection/Document)
-            return doc(db, `artifacts/${appId}/users/${userId}/preferences/vector`);
-        }
-
-        async function loadPreferences() {
-            if (!isAuthReady || !db || !userId) return;
+        function loadStateFromLocalStorage() {
             try {
-                const docRef = await getDocRef();
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
+                const storedState = localStorage.getItem('hakka_quiz_state');
+                if (storedState) {
+                    const data = JSON.parse(storedState);
                     currentPreferences = data.preferences || { ...PREFERENCE_DIMENSIONS };
                     currentQuizStep = data.quiz_step || 0;
-                    console.log("Loaded preferences:", currentPreferences, "Step:", currentQuizStep);
-                    
-                    // 檢查是否已完成測驗，並在載入後發送下一步指令
-                    if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
-                         setTimeout(() => handleMessage('顯示結果'), 50);
-                    }
-                } else {
-                    console.log("No existing preferences found. Using default.");
+                    console.log("Loaded state from localStorage:", data);
+                    return true;
                 }
-            } catch (error) {
-                console.error("Error loading preferences:", error);
+            } catch (e) {
+                console.error("Error loading state from localStorage:", e);
             }
+            return false;
         }
 
-        async function savePreferences() {
-            if (!isAuthReady || !db || !userId) return;
+        function saveStateToLocalStorage() {
             try {
-                const docRef = await getDocRef();
-                await setDoc(docRef, {
+                const stateToSave = {
                     preferences: currentPreferences,
                     quiz_step: currentQuizStep,
-                    timestamp: new Date()
-                });
-                console.log("Preferences saved successfully.");
-            } catch (error) {
-                console.error("Error saving preferences:", error);
+                    timestamp: new Date().toISOString()
+                };
+                localStorage.setItem('hakka_quiz_state', JSON.stringify(stateToSave));
+                console.log("State saved to localStorage.");
+            } catch (e) {
+                console.error("Error saving state to localStorage:", e);
             }
         }
-
+        
         function updatePreferenceVector(valString) {
             (valString || "").split(',').forEach(item => {
                 if (!item) return;
@@ -183,49 +152,6 @@
             });
         }
         
-        // --- Firebase 初始化與認證 ---
-
-        if (Object.keys(firebaseConfig).length > 0) {
-            app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-
-            // 認證狀態變更監聽
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    userId = user.uid;
-                    isAuthReady = true;
-                    console.log("Firebase Auth Ready. User ID:", userId);
-                    await loadPreferences();
-                } else {
-                    // 執行匿名登入，因為我們需要一個 UID 來儲存資料
-                    try {
-                        await signInAnonymously(auth);
-                    } catch (error) {
-                        console.error("Anonymous sign-in failed:", error);
-                        isAuthReady = true; 
-                    }
-                }
-            });
-
-            // 嘗試使用自定義 Token 登入
-            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-            if (initialAuthToken) {
-                signInWithCustomToken(auth, initialAuthToken).catch(error => {
-                    console.error("Custom token sign-in failed, attempting anonymous sign-in:", error);
-                    signInAnonymously(auth).catch(e => console.error("Anonymous sign-in also failed:", e));
-                });
-            } else {
-                // 如果沒有 Token，直接嘗試匿名登入
-                signInAnonymously(auth).catch(e => console.error("Anonymous sign-in failed:", e));
-            }
-
-        } else {
-            console.error("Firebase config is missing. Data persistence is disabled.");
-            isAuthReady = true; // 標記為準備好，繼續模擬操作
-        }
-
-
         // --- 2. 測驗數據與行程數據 (從用戶文件複製) ---
         
         // 台三線景點資料庫 (真實景點，模擬 Google Maps 連結)
@@ -564,11 +490,11 @@
                     // 2. 發送下一題
                     const quizData = QUIZ_QUESTIONS[nextStep];
                     createQuizMessage(quizData, nextStep);
-                    await savePreferences(); // 儲存中間狀態
+                    saveStateToLocalStorage(); // 儲存中間狀態
                 } else {
                     // 3. 測驗結束 (輸出總結)
                     currentQuizStep = TOTAL_QUIZ_STEPS;
-                    await savePreferences(); // 儲存最終向量
+                    saveStateToLocalStorage(); // 儲存最終向量
                     await generatePersonalityMessage(currentPreferences);
                 }
 
@@ -595,7 +521,7 @@
                 // 1. 重設狀態
                 currentQuizStep = 0;
                 currentPreferences = { ...PREFERENCE_DIMENSIONS };
-                await savePreferences(); // 重設數據庫狀態
+                saveStateToLocalStorage(); // 重設本地儲存狀態
             }
 
             // 處理測驗流程
@@ -609,7 +535,7 @@
                 const quizData = QUIZ_QUESTIONS[1];
                 createQuizMessage(quizData, 1);
                 currentQuizStep = 1;
-                await savePreferences();
+                saveStateToLocalStorage();
                 return;
             }
 
@@ -643,25 +569,37 @@
 
         // --- 8. 網頁載入初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
-            // 初始問候語
+            
+            // 1. 載入狀態
+            const stateLoaded = loadStateFromLocalStorage();
+
+            // 2. 初始問候語
             addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
                                 我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>
                                 為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`);
             
-            // 影片吉祥物提示 (因為影片無法放在 LINE 介面中持續播放，故以文字提示)
-            addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在背景載入，歡迎觀賞！)<br>您的用戶ID: ${userId || '正在認證中...'}`);
+            // 3. 影片吉祥物提示 (已移除 Firebase 相關訊息)
+            addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在背景載入，歡迎觀賞！)`);
             
-            // 延遲後顯示開始按鈕 (模擬 Rich Menu 互動)
-            setTimeout(() => {
-                const quizStartButton = `
-                    <div class="w-full text-center">
-                        <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
-                            點我開始問卷！
-                        </button>
-                    </div>
-                `;
-                addMessage('quiz', quizStartButton, true);
-            }, 500);
+            // 4. 根據狀態決定顯示按鈕或直接顯示結果
+            if (stateLoaded && currentQuizStep >= TOTAL_QUIZ_STEPS) {
+                // 如果已經有結果，直接顯示
+                setTimeout(async () => {
+                     await generatePersonalityMessage(currentPreferences);
+                }, 500);
+            } else {
+                // 顯示開始按鈕 (模擬 Rich Menu 互動)
+                setTimeout(() => {
+                    const quizStartButton = `
+                        <div class="w-full text-center">
+                            <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
+                                點我開始問卷！
+                            </button>
+                        </div>
+                    `;
+                    addMessage('quiz', quizStartButton, true);
+                }, 500);
+            }
         });
 
     </script>
