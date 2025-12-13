@@ -566,6 +566,12 @@
                 userInput.value = ''; // 清空輸入框
             }
         }
+        
+        // --- 全域曝光函式以解決 ReferenceError ---
+        window.handleMessage = handleMessage;
+        window.handlePostback = handlePostback;
+        window.sendMessage = sendMessage;
+
 
         // --- 8. 網頁載入初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
