@@ -9,18 +9,24 @@
     <!-- 載入 Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         /* 使用 Inter 字體 */
         :root { font-family: 'Inter', sans-serif; }
         /* 模擬 LINE 聊天背景 */
-        body { background-color: #f0f0f0; }
+        body { background-color: #0d284a; /* 深藍色背景 */ }
+        
+        /* 定義主題色 */
+        .color-primary { background-color: #103561; } /* 深藍色 */
+        .color-accent { background-color: #f59e0b; } /* 橙色 */
+
         #chat-window {
-            background-color: #e5ddd5; /* 輕微的米白色背景 */
+            background-color: #1a4270; /* 輕微的米白色背景，但採用淺一點的藍色 */
             max-width: 480px;
             height: 90vh; /* 增加高度 */
             max-height: 800px;
             margin: 20px auto;
             border-radius: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -28,14 +34,16 @@
         .bot-message {
             background-color: #ffffff;
             border-radius: 15px 15px 15px 5px;
-            max-width: 90%; /* 確保內容能完整顯示 */
-            /* 讓 bot-message 容器本身具有彈性，以包裹圖片 */
-            display: inline-block; 
+            max-width: 90%;
+            display: inline-block;
+            color: #103561; /* 機器人訊息為深藍色文字 */
         }
         .user-message {
-            background-color: #a8e48b; /* LINE 綠 */
+            background-color: #a8e48b; /* LINE 綠 / 改為淺橙色 */
+            background-color: #fde68a; /* 淺橙色背景 */
             border-radius: 15px 15px 5px 15px;
             max-width: 80%;
+            color: #103561; /* 用戶訊息為深藍色文字 */
         }
         .flex-card {
             border-radius: 12px;
@@ -52,7 +60,7 @@
 
     <div id="chat-window">
         <!-- Chat Header -->
-        <div class="p-4 bg-green-700 text-white shadow-md flex items-center justify-center rounded-t-xl">
+        <div class="p-4 color-primary text-white shadow-md flex items-center justify-center rounded-t-xl">
             <i data-lucide="map-pin" class="w-5 h-5 mr-2"></i>
             <h1 class="text-xl font-bold">客途 AI 旅伴 - 浪漫台三線</h1>
         </div>
@@ -65,10 +73,10 @@
         <!-- Input Area (Rich Menu & Text Input Simulation) -->
         <div id="input-area" class="p-4 bg-gray-100 border-t border-gray-300">
             <div id="rich-menu-sim" class="flex justify-center space-x-2 mb-3">
-                <button onclick="handleMessage('我想規劃行程')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
+                <button onclick="handleMessage('我想規劃行程')" class="bg-blue-700 hover:bg-blue-800 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
                     <i data-lucide="route" class="w-3 h-3 inline-block"></i> 直接規劃
                 </button>
-                <button onclick="handleMessage('重新測驗')" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
+                <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white text-xs px-3 py-1 rounded-full shadow-md transition duration-200">
                     <i data-lucide="list-checks" class="w-3 h-3 inline-block"></i> 開始問卷
                 </button>
             </div>
@@ -81,10 +89,18 @@
         </div>
     </div>
 
-    <script>
-        // --- 核心數據結構 (用於儲存用戶狀態與偏好向量) ---
+    <!-- Firebase SDK 引入 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const USER_STATUS_DB = {};
+        // 設定 Firebase Debug Log
+        setLogLevel('Debug');
+        
+        // --- 1. 核心數據結構 (用於儲存用戶狀態與偏好向量) ---
+
         const DEFAULT_USER_ID = "web_user_123";
         const messagesContainer = document.getElementById('messages');
         const userInput = document.getElementById('user-input');
@@ -96,6 +112,122 @@
             "Indoor": 0, "RiskAversion": 0
         };
 
+        // 狀態管理
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+        let currentPreferences = { ...PREFERENCE_DIMENSIONS }; // Global state for preferences
+        let currentQuizStep = 0; // Global state for quiz step
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+        // --- Firebase Paths and Ops ---
+        async function getDocRef() {
+            if (!db || !userId) {
+                throw new Error("Firebase or User ID not initialized.");
+            }
+            // 最終修正的路徑：使用標準 6 段私有路徑 (Collection/Document/Collection/Document/Collection/Document)
+            return doc(db, `artifacts/${appId}/users/${userId}/preferences/vector`);
+        }
+
+        async function loadPreferences() {
+            if (!isAuthReady || !db || !userId) return;
+            try {
+                const docRef = await getDocRef();
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    currentPreferences = data.preferences || { ...PREFERENCE_DIMENSIONS };
+                    currentQuizStep = data.quiz_step || 0;
+                    console.log("Loaded preferences:", currentPreferences, "Step:", currentQuizStep);
+                    
+                    // 檢查是否已完成測驗，並在載入後發送下一步指令
+                    if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
+                         setTimeout(() => handleMessage('顯示結果'), 50);
+                    }
+                } else {
+                    console.log("No existing preferences found. Using default.");
+                }
+            } catch (error) {
+                console.error("Error loading preferences:", error);
+            }
+        }
+
+        async function savePreferences() {
+            if (!isAuthReady || !db || !userId) return;
+            try {
+                const docRef = await getDocRef();
+                await setDoc(docRef, {
+                    preferences: currentPreferences,
+                    quiz_step: currentQuizStep,
+                    timestamp: new Date()
+                });
+                console.log("Preferences saved successfully.");
+            } catch (error) {
+                console.error("Error saving preferences:", error);
+            }
+        }
+
+        function updatePreferenceVector(valString) {
+            (valString || "").split(',').forEach(item => {
+                if (!item) return;
+                const matches = item.match(/([+-]\d+)([A-Za-z]+)/);
+                if (matches && matches.length === 3) {
+                    const val = parseInt(matches[1]);
+                    const dim = matches[2];
+                    if (dim in currentPreferences) {
+                        currentPreferences[dim] += val;
+                    }
+                }
+            });
+        }
+        
+        // --- Firebase 初始化與認證 ---
+
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // 認證狀態變更監聽
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    isAuthReady = true;
+                    console.log("Firebase Auth Ready. User ID:", userId);
+                    await loadPreferences();
+                } else {
+                    // 執行匿名登入，因為我們需要一個 UID 來儲存資料
+                    try {
+                        await signInAnonymously(auth);
+                    } catch (error) {
+                        console.error("Anonymous sign-in failed:", error);
+                        isAuthReady = true; 
+                    }
+                }
+            });
+
+            // 嘗試使用自定義 Token 登入
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            if (initialAuthToken) {
+                signInWithCustomToken(auth, initialAuthToken).catch(error => {
+                    console.error("Custom token sign-in failed, attempting anonymous sign-in:", error);
+                    signInAnonymously(auth).catch(e => console.error("Anonymous sign-in also failed:", e));
+                });
+            } else {
+                // 如果沒有 Token，直接嘗試匿名登入
+                signInAnonymously(auth).catch(e => console.error("Anonymous sign-in failed:", e));
+            }
+
+        } else {
+            console.error("Firebase config is missing. Data persistence is disabled.");
+            isAuthReady = true; // 標記為準備好，繼續模擬操作
+        }
+
+
+        // --- 2. 測驗數據與行程數據 (從用戶文件複製) ---
+        
         // 台三線景點資料庫 (真實景點，模擬 Google Maps 連結)
         const HAKKA_ATTRACTIONS = [
             { id: 1, region: "桃園", name: "大溪老街 (Daxi Old Street)", theme: ["Culture", "Indoor", "Pace"], description: "充滿巴洛克式立面建築的歷史街區，適合室內文化探索與慢步調。", map_url: "https://maps.app.goo.gl/yQ9fQ7k7yJ6eLg9v9" },
@@ -181,38 +313,8 @@
         };
         const TOTAL_QUIZ_STEPS = Object.keys(QUIZ_QUESTIONS).length; // 總共有 10 題
 
-        // --- 核心邏輯函數 (保持不變) ---
-
-        function getUserState(userId) {
-            if (!USER_STATUS_DB[userId]) {
-                USER_STATUS_DB[userId] = {
-                    "quiz_step": 0,
-                    "preferences": { ...PREFERENCE_DIMENSIONS }
-                };
-            }
-            return USER_STATUS_DB[userId];
-        }
-
-        function updatePreferenceVector(userId, valString) {
-            const state = getUserState(userId);
-            
-            (valString || "").split(',').forEach(item => { 
-                if (!item) return;
-                
-                const matches = item.match(/([+-]\d+)([A-Za-z]+)/                );
-                if (matches && matches.length === 3) {
-                    const val = parseInt(matches[1]);
-                    const dim = matches[2];
-                    
-                    if (dim in state.preferences) {
-                        state.preferences[dim] += val;
-                    }
-                }
-            });
-            return state.preferences;
-        }
-
-        // --- 訊息 UI 函數 (微調 bot-message 結構以確保圖片顯示) ---
+        
+        // --- 3. 訊息 UI 函數 ---
 
         function addMessage(type, contentHTML, isQuiz = false) {
             const isBot = (type === 'bot' || type === 'quiz');
@@ -231,7 +333,7 @@
 
             if (isBot && !isQuiz) {
                 // 一般機器人訊息
-                contentDiv.innerHTML = `<i data-lucide="bot" class="w-4 h-4 mr-1 inline-block text-green-700"></i> ${contentHTML}`;
+                contentDiv.innerHTML = `<i data-lucide="bot" class="w-4 h-4 mr-1 inline-block text-blue-900"></i> ${contentHTML}`;
             } else if (!isBot) {
                 // 用戶訊息
                 contentDiv.innerHTML = contentHTML;
@@ -248,7 +350,7 @@
             return contentDiv; // Return the actual message content div
         }
 
-        // --- 測驗 UI 函數 (保持不變) ---
+        // --- 4. 測驗 UI 函數 ---
 
         function createQuizMessage(questionData, currentStep) {
             const q = questionData.text;
@@ -256,7 +358,7 @@
             
             let quizHTML = `
                 <div class="text-xs text-gray-500 mb-2">客途 AI 旅伴 - 旅遊偏好問卷 (第 ${currentStep}/${TOTAL_QUIZ_STEPS} 題)</div>
-                <div class="text-lg font-bold text-green-700 mb-3">${q}</div>
+                <div class="text-lg font-bold text-blue-900 mb-3">${q}</div>
                 <div class="space-y-2">
             `;
 
@@ -265,9 +367,10 @@
                 // data 格式模仿 LINE Postback: action=next_quiz&step=2&val=+3Culture,+2CultureDepth
                 const postbackData = `action=next_quiz&step=${nextStep}&val=${option.val}`;
                 
+                // 測驗選項按鈕使用深藍色調
                 quizHTML += `
                     <button onclick="handlePostback('${postbackData}')" 
-                            class="w-full text-left p-3 bg-gray-50 hover:bg-green-100 border border-green-200 rounded-lg text-sm transition duration-150">
+                            class="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm transition duration-150 text-gray-800">
                         ${option.label}
                     </button>
                 `;
@@ -278,7 +381,7 @@
             addMessage('quiz', quizHTML, true);
         }
         
-        // --- 行程規劃函數 (保持不變) ---
+        // --- 5. 行程規劃函數 ---
         function generateHakkaItinerary(userQuery, preferenceVector) {
             const query = userQuery.toLowerCase();
             const topPreference = Object.keys(preferenceVector).reduce((a, b) => preferenceVector[a] > preferenceVector[b] ? a : b);
@@ -349,11 +452,11 @@
                 itineraryItemsHTML += `
                     <div class="py-2 border-b border-gray-100 last:border-b-0">
                         <div class="flex items-center text-sm font-semibold text-gray-700 mb-1">
-                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-green-600"></i>
+                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-amber-500"></i>
                             ${item.time} - ${item.name}
                         </div>
                         <p class="text-xs text-gray-500 pl-6">${item.description}</p>
-                        <a href="${item.location_url}" target="_blank" class="text-xs text-indigo-500 hover:text-indigo-700 transition duration-150 pl-6 underline flex items-center mt-1">
+                        <a href="${item.location_url}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800 transition duration-150 pl-6 underline flex items-center mt-1">
                             <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i> Google 地圖
                         </a>
                     </div>
@@ -362,21 +465,21 @@
             
             const cardHTML = `
                 <div class="flex-card w-full max-w-sm text-gray-800">
-                    <div class="p-3 bg-green-700 text-white rounded-t-xl">
+                    <div class="p-3 color-primary text-white rounded-t-xl">
                         <div class="text-xl font-bold">${itineraryJson.title}</div>
                         <div class="text-xs opacity-80 mt-1">主題: ${itineraryJson.theme}</div>
                     </div>
                     
                     <div class="p-4 space-y-3">
                         <div class="border-b pb-3">
-                            <div class="text-xs font-semibold text-green-700 mb-1">小阿客推薦理由:</div>
+                            <div class="text-xs font-semibold text-blue-900 mb-1">小阿客推薦理由:</div>
                             <p class="text-sm">${itineraryJson.recommendation_reason}</p>
                         </div>
                         
                         <div class="text-sm font-bold mt-3">【詳細行程 - 台三線客庄】</div>
                         ${itineraryItemsHTML}
 
-                        <div class="text-right text-xs text-indigo-500 font-medium pt-2">
+                        <div class="text-right text-xs text-blue-600 font-medium pt-2">
                             低碳估算（參考值）: ${itineraryJson.carbon_footprint_estimate}
                         </div>
                     </div>
@@ -391,198 +494,82 @@
             addMessage('bot', cardHTML, true);
         }
         
-        // --- 圖像生成與錯誤處理 ---
+        // --- 6. 旅型人格生成 (移除圖像 API 呼叫，專注於流程) ---
 
-        async function callImageGenerationApi(prompt) {
-            const apiKey = ""; 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
-            
-            const payload = { 
-                instances: [{ prompt: prompt }], 
-                parameters: { 
-                    "sampleCount": 1,
-                    "outputMimeType": "image/png",
-                    "aspectRatio": "1:1" // 適合聊天視窗的比例
-                } 
-            };
-
-            let attempts = 0;
-            const maxAttempts = 3;
-
-            while (attempts < maxAttempts) {
-                try {
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    
-                    const result = await response.json();
-                    
-                    if (result.predictions && result.predictions.length > 0 && result.predictions[0].bytesBase64Encoded) {
-                        return result.predictions[0].bytesBase64Encoded;
-                    } else {
-                        throw new Error("Image API returned no valid data.");
-                    }
-
-                } catch (error) {
-                    attempts++;
-                    if (attempts < maxAttempts) {
-                        // Exponential backoff
-                        const delay = Math.pow(2, attempts) * 1000;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                    } else {
-                        console.error("Failed to call Image Generation API after multiple retries:", error);
-                        return null;
-                    }
-                }
-            }
-        }
-
-
-        async function generatePersonalityImageAndMessage(finalPrefs) {
+        async function generatePersonalityMessage(finalPrefs) {
             const score = (dim) => finalPrefs[dim] || 0;
 
-            let mainPersonality = ""; 
-            let imagePromptEnglish = ""; 
+            let mainPersonality = "";  
+            let traitDescription = ""; 
             let itineraryFocus = ""; 
-            let traitDescription = ""; // 新增特質描述
-
-            // --- 新增的旅型人格判斷邏輯 ---
             
             // 1. 判斷核心維度
             const outdoorScore = score('Outdoor') - score('Indoor');
-            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5); 
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5);  
             const focusScore = score('CultureDepth') * 2 + score('Culture');
             
             // 2. 旅型人格分類
-            
             if (focusScore > 8 && outdoorScore > 0) {
-                // 高度文化深度 + 偏好戶外/探索 > 精緻探索家
                 mainPersonality = "精緻探索家 (The Cultured Explorer)";
-                imagePromptEnglish = "A person carefully examining a complex map near a historic Hakka temple in Taiwan, carrying a small, neat backpack. Detailed, cinematic, photo-realistic.";
                 traitDescription = "您的基因：**內斂、規劃、知識享受、探索**。您重視旅程的知識性與效率，喜歡深入挖掘文化，並願意花費時間與精力去探索獨特景點。";
                 itineraryFocus = "【精緻探索家】您需要結合**歷史古蹟深度導覽**與**高質量戶外體驗**。您的行程應包含明確的學習目標和高效率的移動，專注於質量而非數量。";
             } else if (outdoorScore < -4 && score('Pace') > 4) {
-                // 強烈偏好室內 + 慢活步調 > 悠活度假客
                 mainPersonality = "悠活度假客 (The Relaxed Retreat)";
-                imagePromptEnglish = "A cozy indoor scene of a person reading a book and sipping tea in a comfortable chair by a window overlooking a misty, green Hakka village, soft ambient lighting, warm and peaceful, photograph style.";
-                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，只要能讓身心放鬆，行程規劃的細節可完全交由他人處理，住宿與美食的品質對您很重要。";
+                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，住宿與美食的品質對您很重要。";
                 itineraryFocus = "【悠活度假客】您應選擇主打**高品質客庄旅宿**、**在地客家慢食**、**室內手作體驗**。您的旅行哲學是『慢下來，享受當下』。";
             } else if (outdoorScore > 4 && paceScore < -2) {
-                // 強烈偏好戶外 + 緊湊/低Pace > 行動拓荒者
                 mainPersonality = "行動拓荒者 (The Action Pioneer)";
-                imagePromptEnglish = "A person standing triumphantly on a mountain peak in the Hakka region, view of rolling hills in the background, high energy, dramatic wide-angle shot, vibrant colors, photorealistic.";
-                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性，喜歡用雙腳丈量土地。";
-                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡，享受體能上的滿足感。";
+                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性。";
+                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡。";
             } else {
-                // 其他均衡類型 (常伴隨高 Family/Accessibility) > 平和優遊家
                 mainPersonality = "平和優遊家 (The Harmonious Wanderer)";
-                imagePromptEnglish = "A family (multi-generational) walking together on a wide, accessible path in a scenic park, sunny day, focus on ease and happiness, bright and cheerful, illustration style.";
-                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境，是團隊中最好的協調者與隨行者。";
+                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境。";
                 itineraryFocus = "【平和優遊家】您適合選擇**交通便利、配套設施完善**的景點（如大型客家文化園區、易達老街），確保行程流暢且所有旅伴都能舒適參與。";
             }
             
-            // 組合最終訊息 (載入前部分)
             let finalMessageContent = `
-                <div class="w-full text-center p-3">
-                    <div class="text-xl font-bold text-red-600 border-b-2 border-red-600 pb-2 mb-3">您的旅型人格揭曉！</div>
-                    <div class="text-3xl font-extrabold text-green-700 mb-2">${mainPersonality}</div>
-                    <div class="text-sm text-gray-700 font-medium mb-4">${traitDescription}</div>
-                </div>
-            `;
-            finalMessageContent += `
-                <div class="p-4 bg-gray-50 rounded-lg w-full">
-                    <i data-lucide="loader" class="w-5 h-5 inline-block animate-spin mr-2 text-green-700"></i>
-                    小阿客正在為您的【${mainPersonality}】旅型人格生成專屬意境圖... (約需 10-15 秒)
-                </div>
-            `;
-
-            // Add the loading message to the chat and get its div
-            const messageId = `msg-${Date.now()}`;
-            const messageContentWrapper = addMessage('bot', `<div id="${messageId}" class="w-full">${finalMessageContent}</div>`);
-            
-            let imageUrl = null;
-            try {
-                const base64Data = await callImageGenerationApi(imagePromptEnglish);
-                if (base64Data) {
-                    imageUrl = `data:image/png;base64,${base64Data}`;
-                }
-            } catch (e) {
-                console.error("Image generation failed:", e);
-            }
-
-            // 4. 替換/更新訊息內容
-            let imageHtml = '';
-            if (imageUrl) {
-                // 修正格式跑掉的問題：確保圖片使用 w-full 且被 bot-message 良好包裹
-                imageHtml = `<div class="mt-4 w-full rounded-lg shadow-xl overflow-hidden">
-                                <img src="${imageUrl}" alt="AI 意境圖: ${mainPersonality}" class="w-full h-auto object-cover">
-                            </div>`;
-            } else {
-                imageHtml = `<div class="mt-4 p-4 text-center bg-red-100 rounded-lg text-red-700 text-sm">
-                                意境圖生成失敗，請稍後再試。
-                            </div>`;
-            }
-
-            // Final message content with image
-            let finalMessageWithImage = `
                 <div class="p-3 w-full">
-                    <div class="text-xl font-bold text-red-600 border-b-2 border-red-600 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
-                    <div class="text-3xl font-extrabold text-green-700 mb-2 text-center">${mainPersonality}</div>
+                    <div class="text-xl font-bold text-blue-900 border-b-2 border-blue-900 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
+                    <div class="text-3xl font-extrabold text-amber-600 mb-2 text-center">${mainPersonality}</div>
                     <div class="text-sm text-gray-700 font-medium mb-4 text-center">${traitDescription}</div>
                     
-                    ${imageHtml}
-                    
                     <div class="mt-4 pt-3 border-t border-gray-100">
-                        <div class="text-sm font-semibold text-green-700 mb-1">小阿客的客製化行程建議：</div>
+                        <div class="text-sm font-semibold text-blue-900 mb-1">小阿客的客製化行程建議：</div>
                         <p class="text-sm text-gray-600">${itineraryFocus}</p>
-                        <p class="mt-3 text-xs text-indigo-500">現在請直接輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
+                        <p class="mt-3 text-xs text-blue-600">現在請輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
                     </div>
                 </div>
             `;
-
-
-            // Update the content of the existing message wrapper
-            if (messageContentWrapper) {
-                messageContentWrapper.classList.add('p-0'); // 移除外層 padding，讓內層自訂
-                messageContentWrapper.innerHTML = finalMessageWithImage;
-                lucide.createIcons(); // Re-render icons after content change
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            }
+            
+            // 將最終內容添加到聊天
+            addMessage('quiz', finalMessageContent, true);
         }
 
 
-        // --- 事件處理 (保持不變) ---
+        // --- 7. 事件處理 ---
 
         async function handlePostback(data) {
             const params = new URLSearchParams(data);
             const action = params.get('action');
-            const userState = getUserState(DEFAULT_USER_ID);
 
             if (action === 'next_quiz') {
                 const nextStep = parseInt(params.get('step'));
                 const valString = params.get('val');
                 
                 // 1. 累積權重
-                updatePreferenceVector(DEFAULT_USER_ID, valString);
-                userState.quiz_step = nextStep - 1; 
+                updatePreferenceVector(valString);
+                currentQuizStep = nextStep; // 更新全域步驟
 
                 if (nextStep <= TOTAL_QUIZ_STEPS) {
                     // 2. 發送下一題
                     const quizData = QUIZ_QUESTIONS[nextStep];
                     createQuizMessage(quizData, nextStep);
-                    userState.quiz_step = nextStep;
+                    await savePreferences(); // 儲存中間狀態
                 } else {
-                    // 3. 測驗結束 (輸出浪漫化的總結 + 圖像生成)
-                    userState.quiz_step = TOTAL_QUIZ_STEPS;
-                    const finalPrefs = userState.preferences;
-                    
-                    await generatePersonalityImageAndMessage(finalPrefs);
+                    // 3. 測驗結束 (輸出總結)
+                    currentQuizStep = TOTAL_QUIZ_STEPS;
+                    await savePreferences(); // 儲存最終向量
+                    await generatePersonalityMessage(currentPreferences);
                 }
 
             } else if (action === 'get_rain_plan') {
@@ -595,53 +582,45 @@
          * 處理用戶在 Rich Menu 或文字輸入框的指令
          * @param {string} text - 用戶輸入或點擊的指令文字
          */
-        function handleMessage(text) {
-            const userState = getUserState(DEFAULT_USER_ID);
+        async function handleMessage(text) {
             
             // 模擬用戶發送訊息
             addMessage('user', text);
 
             const isRestart = text === "重新測驗" || text === "開始問卷";
-            
-            // --- 修正 BUG: 確保點擊 '重新測驗' 時能正確啟動測驗 ---
+            const isFinished = currentQuizStep >= TOTAL_QUIZ_STEPS;
+            const isPlanning = text.includes('規劃行程') || text.includes('行程') || text.includes('顯示結果');
             
             if (isRestart) {
                 // 1. 重設狀態
-                userState.quiz_step = 0;
-                userState.preferences = { ...PREFERENCE_DIMENSIONS };
+                currentQuizStep = 0;
+                currentPreferences = { ...PREFERENCE_DIMENSIONS };
+                await savePreferences(); // 重設數據庫狀態
             }
 
-            // Check if quiz needs to be started (step is 0)
-            if (userState.quiz_step === 0) {
-                // 讓用戶知道需要先測驗
-                if (text.includes('規劃行程') && !isRestart) {
+            // 處理測驗流程
+            if (currentQuizStep === 0) {
+                if (isPlanning && !isRestart) {
                     addMessage('bot', "小阿客了解您的需求！請先點擊「開始問卷」按鈕，完成 **10 題客庄旅遊問卷**，以獲得最客製化的行程建議。");
-                    return; // 提示後不立即啟動，讓用戶自行點擊
-                } else if (!isRestart && !text.includes('規劃行程')) {
-                    // 如果用戶輸入隨意文字，提示他們開始測驗
-                    addMessage('bot', "請先點擊「開始問卷」按鈕，啟動客製化流程。");
-                    return;
+                    return; 
                 }
                 
-                // 2. 啟動測驗 (Q1)
+                // 啟動測驗 (Q1)
                 const quizData = QUIZ_QUESTIONS[1];
                 createQuizMessage(quizData, 1);
-                userState.quiz_step = 1;
+                currentQuizStep = 1;
+                await savePreferences();
                 return;
             }
-            // --- 修正結束 ---
 
-
-            // 處理行程規劃需求 (需要先完成測驗)
-            if (userState.quiz_step >= TOTAL_QUIZ_STEPS || text.includes('規劃行程') || text.includes('行程')) {
+            // 處理規劃流程 (必須完成測驗)
+            if (isFinished) {
                 try {
-                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-green-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
+                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
-                    // 模擬 1.5 秒延遲來模擬 LLM 呼叫時間
+                    // 模擬 1.5 秒延遲來模擬 RAG/LLM 呼叫時間
                     setTimeout(() => {
-                        const preferenceVector = userState.preferences;
-                        // 使用新的 LLM 函數，該函數會結合真實景點資料庫進行規劃
-                        const itineraryJson = generateHakkaItinerary(text, preferenceVector);
+                        const itineraryJson = generateHakkaItinerary(text, currentPreferences);
                         createItineraryCard(itineraryJson);
                     }, 1500);
 
@@ -649,9 +628,8 @@
                     addMessage('bot', `對不起，行程規劃系統出現錯誤: ${e.message}`);
                     console.error("行程規劃錯誤:", e);
                 }
-            } else if (userState.quiz_step > 0 && userState.quiz_step < TOTAL_QUIZ_STEPS) {
-                // 用戶正在測驗中，但輸入了其他文字
-                 addMessage('bot', `請先回答目前的第 ${userState.quiz_step} 題，才能繼續喔！`);
+            } else if (currentQuizStep > 0 && currentQuizStep < TOTAL_QUIZ_STEPS) {
+                 addMessage('bot', `請先回答目前的第 ${currentQuizStep} 題，才能繼續喔！`);
             }
         }
 
@@ -663,23 +641,26 @@
             }
         }
 
-        // --- 網頁載入初始化 ---
+        // --- 8. 網頁載入初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
             // 初始問候語
             addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
                                 我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>
-                                為了給您最貼心的行程建議，請先完成 **10 題客庄旅遊問卷**。`);
+                                為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`);
+            
+            // 影片吉祥物提示 (因為影片無法放在 LINE 介面中持續播放，故以文字提示)
+            addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在背景載入，歡迎觀賞！)<br>您的用戶ID: ${userId || '正在認證中...'}`);
             
             // 延遲後顯示開始按鈕 (模擬 Rich Menu 互動)
             setTimeout(() => {
                 const quizStartButton = `
                     <div class="w-full text-center">
-                        <button onclick="handleMessage('重新測驗')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
+                        <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
                             點我開始問卷！
                         </button>
                     </div>
                 `;
-                addMessage('bot', quizStartButton, true);
+                addMessage('quiz', quizStartButton, true);
             }, 500);
         });
 
