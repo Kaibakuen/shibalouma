@@ -27,6 +27,9 @@
         /* --- 轉場動畫定義 --- */
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+        
+        /* 隱藏警告區域，因為我們已經使用後端代理 */
+        #risk-warning { display: none; }
 
         /* ------------------------ */
         /* SPLASH SCREEN 樣式 */
@@ -220,8 +223,13 @@
                             載入中...
                         </div>
                     </div>
+                    
+                    <!-- 警告區域：提醒金鑰風險 -->
+                    <div id="risk-warning">
+                        ❗ **警告：** 金鑰已直接公開在程式碼中，請勿用於實際應用。
+                    </div>
 
-                    <!-- 新增：API 狀態檢查區塊 -->
+                    <!-- API 狀態檢查區塊 -->
                     <div class="mt-6">
                         <div class="font-semibold text-accent mb-2">服務狀態</div>
                         <div id="api-status" class="text-xs space-y-1">
@@ -297,7 +305,21 @@
 
     <!-- 載入核心邏輯 (使用標準 script 標籤解決 lucide 錯誤) -->
     <script>
-        // --- 核心變數和函式定義 (提升作用域) ---
+        
+        // ----------------------------------------------------
+        // ❗❗❗ 第 0 步：設定 API 連線 ❗❗❗
+        // ----------------------------------------------------
+        // [1] Cloud Run 代理服務網址 (用於 Gemini/MOTC - 後端已部署成功)
+        const CLOUD_RUN_BASE_URL = "https://shiba-732853956066.asia-east1.run.app"; 
+        // [2] Google Maps 金鑰 (唯一需要留在前端的公開金鑰 - 必須由您填寫)
+        const GOOGLE_MAPS_API_KEY = "請貼上您的 Google Maps 金鑰"; 
+        // ----------------------------------------------------
+        
+        const PROXY_API_URL = `${CLOUD_RUN_BASE_URL}/api/gemini-proxy`;
+        // 其他變數保持不變...
+
+
+        // --- 核心變數和函式定義 ---
 
         const messagesContainer = document.getElementById('messages');
         const userInput = document.getElementById('user-input');
@@ -397,7 +419,7 @@
             { id: 1, region: "桃園", name: "大溪老街 (Daxi Old Street)", theme: ["Culture", "Indoor", "Pace"], description: "充滿巴洛克式立面建築的歷史街區，適合室內文化探索與慢步調。", map_url: "https://maps.app.goo.gl/yQ9fQ7k7yJ6eLg9v9", lat: 24.8722, lng: 121.2882 },
             { id: 2, region: "新竹", name: "北埔老街/金廣福公館", theme: ["Culture", "CultureDepth", "Indoor"], description: "北台灣客家文化的中心，必嚐擂茶，適合文史愛好者深度探索。", map_url: "https://maps.maps.app.goo.gl/6E6oN2hV1r9XJz3f7", lat: 24.6946, lng: 121.0506 },
             { id: 3, region: "新竹", name: "峨眉湖/細茅埔吊橋", theme: ["Outdoor", "LowCarbon", "Pace"], description: "湖畔步道與生態景觀，適合戶外、騎單車的低碳慢活路線。", map_url: "https://maps.app.goo.gl/DkK8Z7yB7N8xT6rD7", lat: 24.6865, lng: 121.0425 },
-            { id: 4, region: "苗栗", name: "獅頭山風景區", theme: ["Outdoor", "CultureDepth", "RiskAversion"], description: "健行步道與古道文化，是挑戰型的戶外登山健行首選。", map_url: "https://maps.app.goo.gl/yP7jXg4Z1b6hC5rP9", lat: 24.6468, lng: 120.9702 },
+            { id: 4, region: "苗栗", name: "獅頭山風景區", theme: ["Outdoor", "CultureDepth", "RiskAversion"], description: "健行步道與古道文化，是挑戰型的戶外登山健行首選。", map_url: "https://maps.app.goo.gl/yP7jG4Z1b6hC5rP9", lat: 24.6468, lng: 120.9702 },
             { id: 5, region: "苗栗", name: "南庄老街 (桂花巷)", theme: ["Culture", "Indoor", "Family"], description: "輕鬆逛街、品嚐客家小吃，具備親子友善設施。", map_url: "https://maps.app.goo.gl/wU2aD6yZ9k7qL5xK8", lat: 24.5902, lng: 121.0101 },
             { id: 6, region: "台中", name: "東勢客家文化園區 (自行車道)", theme: ["LowCarbon", "Outdoor", "Pace"], description: "舊火車站改建，結合鐵道文化與綠色廊道，是單車活動的最佳起點。", map_url: "https://maps.app.goo.gl/Gj8xN4bY5rE2pA3c6", lat: 24.2541, lng: 120.8351 }
         ];
@@ -420,80 +442,47 @@
 
         // [Start] Gemini API
         /**
-         * 呼叫後端代理服務來執行 Gemini 查詢
-         * 由於是純前端，我們使用一個假設的後端 URL
+         * 呼叫 Gemini API (透過 Cloud Run 後端代理)
          */
-        const PROXY_API_URL = "http://127.0.0.1:5000/api/gemini-proxy"; // 🚨 請替換成您部署後的後端網址！
-
         const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
-            // 由於是前端代理呼叫，我們不在此處使用 __gemini_api_key，它應該在後端使用
             
-            // 如果是在 Canvas 環境中，我們仍然允許直接呼叫 Gemini (使用 Canvas 提供的 Key)，
-            // 否則，我們使用代理服務 (Proxy Service)
-            const apiKey = typeof __gemini_api_key !== 'undefined' ? __gemini_api_key : ""; 
-            const isCanvasEnvironment = !!apiKey;
-
-            if (isCanvasEnvironment) {
-                // 模擬 Canvas/Google Cloud 環境的直接呼叫 (用於開發/測試)
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-                
-                if (!apiKey) {
-                     throw new Error("Gemini API Key is missing. Please set the '__gemini_api_key' environment variable in Canvas.");
-                }
-
-                const payload = {
-                    contents: [{ parts: [{ text: userQuery }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    tools: useGrounding ? [{ "google_search": {} }] : undefined,
-                };
-                
-                // (實際的 API 呼叫邏輯)
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                if (!response.ok) {
-                    const errorBody = await response.json();
-                    throw new Error(`API Error: ${response.status} - ${errorBody.error?.message || 'Unknown error'}`);
-                }
-                
-                const result = await response.json();
-                const candidate = result.candidates?.[0];
-                const text = candidate?.content?.parts?.[0]?.text;
-                let sources = [];
-                // ... (省略源碼獲取邏輯，以保持專注於代理)
-                return { text, sources };
-
-            } else {
-                // GitHub Pages 部署後的代理服務呼叫 (正式/安全模式)
-                
-                if (PROXY_API_URL.includes("127.0.0.1")) {
-                     throw new Error(`請將 PROXY_API_URL 設置為您部署後的後端網址 (例如：https://your-proxy.vercel.app/api/gemini-proxy)`);
-                }
-
-                const proxyPayload = {
-                    user_query: userQuery,
-                    system_prompt: systemPrompt,
-                    use_grounding: useGrounding
-                };
-
-                const response = await fetch(PROXY_API_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(proxyPayload)
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Proxy Error: ${response.status} - 無法連接後端代理服務。`);
-                }
-                
-                const result = await response.json();
-                const text = result?.candidates?.[0]?.content?.parts?.[0]?.text || result.text;
-                let sources = []; // 代理模式下，來源處理需要在後端完成
-                return { text: text, sources: sources };
+            if (!CLOUD_RUN_BASE_URL.startsWith("https://")) {
+                 throw new Error("Cloud Run 網址未設定或格式錯誤。");
             }
+            
+            const payload = {
+                user_query: userQuery,
+                system_prompt: systemPrompt,
+                use_grounding: useGrounding,
+            };
+
+            const response = await fetch(PROXY_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                try {
+                    const errorBody = await response.json();
+                    throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '無法連接到 Cloud Run 代理服務。'}`);
+                } catch (e) {
+                     // 這邊是處理 CORS 或後端完全未啟動的情況
+                     throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
+                }
+            }
+            
+            const result = await response.json();
+            const candidate = result.candidates?.[0];
+            const text = candidate?.content?.parts?.[0]?.text;
+            let sources = [];
+            
+            const groundingMetadata = candidate?.groundingMetadata;
+            if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                sources = groundingMetadata.groundingAttributions.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }));
+            }
+            
+            return { text, sources };
         };
 
         const handleDeepDive = async (attractionName) => {
@@ -505,12 +494,16 @@
             const userQuery = `景點名稱: ${attractionName}. 請詳細說明這個景點的歷史和客家文化意義。`;
 
             try {
-                // 調用已經修正的 callGeminiAPI 函式
                 const { text, sources } = await callGeminiAPI(userQuery, systemPrompt, true);
                 
                 let sourceHTML = '';
-                // 註：在代理模式下，前端無法直接解析 groundingAttributions，故此處僅顯示文字
-                
+                if (sources && sources.length > 0) {
+                    sourceHTML = sources.map(s => 
+                        `<a href="${s.uri}" target="_blank" class="text-xs text-blue-600 hover:underline block truncate" title="${s.title}">${s.title}</a>`
+                    ).join('');
+                    sourceHTML = `<div class="mt-2 pt-2 border-t border-gray-100"><div class="text-xs font-semibold text-gray-500">資訊來源:</div>${sourceHTML}</div>`;
+                }
+
                 const responseHTML = `
                     <div class="font-bold text-blue-900 mb-2">✨【${attractionName} 深度解說】</div>
                     <p class="text-sm text-gray-700">${text}</p>
@@ -547,12 +540,16 @@
             `;
             
             try {
-                // 調用已經修正的 callGeminiAPI 函式
                 const { text, sources } = await callGeminiAPI(userQuery, systemPrompt, true);
                 
                 let sourceHTML = '';
-                // 註：在代理模式下，前端無法直接解析 groundingAttributions，故此處僅顯示文字
-                
+                if (sources && sources.length > 0) {
+                    sourceHTML = sources.map(s => 
+                        `<a href="${s.uri}" target="_blank" class="text-xs text-blue-600 hover:underline block truncate" title="${s.title}">${s.title}</a>`
+                    ).join('');
+                    sourceHTML = `<div class="mt-2 pt-2 border-t border-gray-100"><div class="text-xs font-semibold text-gray-500">資訊來源:</div>${sourceHTML}</div>`;
+                }
+
                 const responseHTML = `
                     <div class="font-bold text-blue-900 mb-2">💡 客庄文化小知識</div>
                     <p class="text-sm text-gray-700">${text}</p>
@@ -578,17 +575,16 @@
                 }
                 const script = document.createElement('script');
                 
-                // 從 Canvas 環境變數中獲取 Google Maps 金鑰
-                const mapsApiKey = typeof __google_maps_api_key !== 'undefined' ? __google_maps_api_key : "";
+                // 使用前端公開的金鑰
+                const mapsApiKey = GOOGLE_MAPS_API_KEY;
                 
-                if (!mapsApiKey || mapsApiKey === "") {
-                    console.error("Google Maps API Key is missing. Maps functionality will be disabled. (Please set __google_maps_api_key in Canvas)");
+                if (mapsApiKey === "請貼上您的 Google Maps 金鑰" || !mapsApiKey) {
+                    console.error("Google Maps API Key is missing. Maps functionality will be disabled.");
                     isMapApiLoaded = false; 
                     resolve();
                     return;
                 }
                 
-                // 注意：地圖金鑰仍須在前端載入，但必須在 GCP 上設定網站限制
                 script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsApiKey}&callback=initMapPlaceholder&libraries=routes`; 
                 script.async = true;
                 script.defer = true;
@@ -624,7 +620,7 @@
                 await loadGoogleMapsApi();
 
                 if (!isMapApiLoaded || typeof google === 'undefined') {
-                    mapTitleElement.textContent = `地圖載入失敗：API 金鑰可能錯誤或未啟用。`;
+                    mapTitleElement.textContent = `地圖載入失敗：Google Maps API 金鑰可能錯誤或未啟用。`;
                     return;
                 }
 
@@ -824,6 +820,75 @@
             
             addMessage('quiz', finalMessageContent, true);
         };
+        
+        const generateHakkaItinerary = (query, prefs) => {
+            // 這個函式目前在客戶端模擬行程生成的回應。在實際應用中，這個邏輯會被發送到後端，由 Gemini 根據 prefs 和 query 動態生成。
+            const score = (dim) => prefs[dim] || 0;
+            const isOutdoor = score('Outdoor') > score('Indoor');
+            const isPace = score('Pace') > 0;
+            const isCultureDepth = score('CultureDepth') > 0;
+
+            const regionMatch = query.includes('新竹') ? '新竹' : query.includes('苗栗') ? '苗栗' : '桃園';
+            
+            let filteredAttractions = HAKKA_ATTRACTIONS.filter(a => a.region === regionMatch);
+            
+            if (isOutdoor) {
+                filteredAttractions = filteredAttractions.filter(a => a.theme.includes('Outdoor'));
+            } else if (isCultureDepth) {
+                filteredAttractions = filteredAttractions.filter(a => a.theme.includes('CultureDepth'));
+            }
+            if (filteredAttractions.length < 2) {
+                 filteredAttractions = HAKKA_ATTRACTIONS.filter(a => a.region === regionMatch);
+            }
+
+            const itinerary = [
+                {
+                    time: "09:00",
+                    name: filteredAttractions[0].name,
+                    description: isPace ? "慢活啟動，享受早晨的寧靜。" : "快速抵達並開始深度導覽。",
+                    location_url: filteredAttractions[0].map_url,
+                    lat: filteredAttractions[0].lat,
+                    lng: filteredAttractions[0].lng,
+                },
+                {
+                    time: "12:00",
+                    name: "客家在地美食 (午餐)",
+                    description: "推薦您品嚐傳統擂茶或粄條。",
+                    location_url: "https://maps.app.goo.gl/g6zXJ4r5eQ7c3B9q7", // 模擬美食地點
+                    lat: 24.6940, lng: 121.0500,
+                },
+                {
+                    time: "14:00",
+                    name: filteredAttractions[filteredAttractions.length - 1].name,
+                    description: isCultureDepth ? "下午進行文化體驗，如手作 DIY 或參觀宗祠。" : "輕鬆騎行或散步於戶外美景。",
+                    location_url: filteredAttractions[filteredAttractions.length - 1].map_url,
+                    lat: filteredAttractions[filteredAttractions.length - 1].lat,
+                    lng: filteredAttractions[filteredAttractions.length - 1].lng,
+                },
+            ];
+
+            const theme = isPace ? "慢活悠遊" : "高效探索";
+            
+            return {
+                title: `${regionMatch} 客庄一日遊：${theme} 主題`,
+                theme: theme,
+                recommendation_reason: `根據您的 **${generatePersonality(prefs).mainPersonality}** 人格，我們專注於 ${isCultureDepth ? '深度文化體驗' : '自然環境與戶外休閒'}，行程節奏 ${isPace ? '舒適緩慢' : '緊湊且高效'}。`,
+                carbon_footprint_estimate: "低碳中高 (參考值)",
+                itinerary: itinerary
+            };
+        };
+
+        const generatePersonality = (finalPrefs) => {
+            const score = (dim) => finalPrefs[dim] || 0;
+            const outdoorScore = score('Outdoor') - score('Indoor');
+            const focusScore = score('CultureDepth') * 2 + score('Culture');
+            
+            if (focusScore > 8 && outdoorScore > 0) return { mainPersonality: "精緻探索家" };
+            if (outdoorScore < -4 && score('Pace') > 4) return { mainPersonality: "悠活度假客" };
+            if (outdoorScore > 4) return { mainPersonality: "行動拓荒者" };
+            return { mainPersonality: "平和優遊家" };
+        };
+
         // [End] Main Logic
 
         // [Start] Event Handlers
@@ -883,6 +948,8 @@
                 try {
                     addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
+                    // Call proxy to generate itinerary (simulated on client for now)
+                    // 實際應用中，這個延遲將被實際的 callGeminiAPI(itinerary generation)取代
                     setTimeout(() => {
                         const itineraryJson = generateHakkaItinerary(text, currentPreferences);
                         createItineraryCard(itineraryJson);
@@ -954,26 +1021,24 @@
         };
         
         const displayApiKeyStatus = () => {
-            const geminiKey = typeof __gemini_api_key !== 'undefined' && __gemini_api_key;
-            const mapsKey = typeof __google_maps_api_key !== 'undefined' && __google_maps_api_key;
-            const motcId = typeof __motc_app_id !== 'undefined' && __motc_app_id;
-            const motcKey = typeof __motc_app_key !== 'undefined' && __motc_app_key;
-
-            const updateStatus = (id, hasKey) => {
+            // 檢查 Cloud Run 網址和 Google Maps 金鑰
+            const cloudRunSet = CLOUD_RUN_BASE_URL.startsWith("https://");
+            const mapsKey = GOOGLE_MAPS_API_KEY !== "請貼上您的 Google Maps 金鑰";
+            
+            const updateStatus = (id, isConnected, name) => {
                 const element = document.getElementById(id);
                 if (!element) return;
                 
-                const name = element.textContent.split(' ')[1];
-                if (hasKey) {
-                    element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已載入)`;
+                if (isConnected) {
+                     element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已連線)`;
                 } else {
-                    element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (未載入)`;
+                     element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (請設定金鑰)`;
                 }
             };
 
-            updateStatus('status-gemini', !!geminiKey);
-            updateStatus('status-maps', !!mapsKey);
-            updateStatus('status-motc', !!motcId && !!motcKey);
+            updateStatus('status-gemini', cloudRunSet, 'Gemini AI');
+            updateStatus('status-maps', mapsKey, 'Google Maps');
+            updateStatus('status-motc', cloudRunSet, 'MOTC 交通');
             
             if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
         };
