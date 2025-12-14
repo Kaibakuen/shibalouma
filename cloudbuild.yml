@@ -1,6 +1,9 @@
 steps:
 - name: 'gcr.io/cloud-builders/docker'
-  args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/shiba', '.' ]
+  # ❗ 修正建構指令：使用 -f 參數指定 Dockerfile 名稱 ❗
+  # 假設您的檔案名稱為 Dockerfile (大寫開頭)
+  args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/shiba', '-f', 'Dockerfile', '.' ]
+  # 進入 backend 資料夾
   dir: 'backend'
 images:
 - 'gcr.io/$PROJECT_ID/shiba'
