@@ -1,5 +1,0 @@
-Flask             # 輕量級網頁框架
-python-dotenv     # 用於讀取 .env 檔案
-requests          # 用於向 Gemini 發送 HTTP 請求
-flask-cors        # 允許前端 (GitHub Pages) 跨域呼叫
-gunicorn
