@@ -154,6 +154,33 @@
         #mascot-video::-webkit-media-controls { display: none !important; }
         #splash-video,
         #mascot-video { pointer-events: none; }
+
+        /* 地圖模態視窗樣式 */
+        #map-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        #map-container {
+            width: 90%;
+            max-width: 800px;
+            height: 80%;
+            background-color: white;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        #map {
+            width: 100%;
+            height: calc(100% - 40px); /* 留出關閉按鈕空間 */
+        }
     </style>
 </head>
 <body class="p-0 flex flex-col items-center justify-center min-h-screen">
@@ -191,6 +218,17 @@
                         <div class="font-semibold text-accent mb-2">您的 ID 資訊</div>
                         <div id="user-id-display" class="text-xs break-all bg-white/10 p-2 rounded-lg">
                             載入中...
+                        </div>
+                    </div>
+
+                    <!-- 新增：API 狀態檢查區塊 -->
+                    <div class="mt-6">
+                        <div class="font-semibold text-accent mb-2">服務狀態</div>
+                        <div id="api-status" class="text-xs space-y-1">
+                            <!-- 狀態將由 JS 動態填入 -->
+                            <p id="status-gemini"><i data-lucide="minus" class="w-4 h-4 mr-1 inline-block text-gray-400"></i> Gemini AI</p>
+                            <p id="status-maps"><i data-lucide="minus" class="w-4 h-4 mr-1 inline-block text-gray-400"></i> Google Maps</p>
+                            <p id="status-motc"><i data-lucide="minus" class="w-4 h-4 mr-1 inline-block text-gray-400"></i> MOTC 交通</p>
                         </div>
                     </div>
                 </div>
@@ -244,34 +282,41 @@
             </div>
         </div>
     </div>
+    
+    <!-- 3. MAP MODAL (地圖模態視窗) -->
+    <div id="map-modal" style="display: none;">
+        <div id="map-container">
+            <button onclick="hideMap()" class="absolute top-2 right-2 z-30 bg-red-600 text-white p-2 rounded-full shadow-lg hover:bg-red-700 transition">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+            <div id="map" class="w-full h-full"></div>
+            <div id="map-title" class="absolute top-0 left-0 right-0 color-primary text-white p-2 text-center text-sm font-semibold z-20">地圖載入中...</div>
+        </div>
+    </div>
+
 
     <!-- 載入核心邏輯 (使用標準 script 標籤解決 lucide 錯誤) -->
     <script>
-        // --- 核心數據結構 (用於儲存用戶狀態與偏好向量) ---
+        // --- 核心變數和函式定義 (提升作用域) ---
 
         const messagesContainer = document.getElementById('messages');
         const userInput = document.getElementById('user-input');
         const userIdDisplay = document.getElementById('user-id-display');
 
-        // 旅遊偏好維度
         const PREFERENCE_DIMENSIONS = {
             "Culture": 0, "Outdoor": 0, "Pace": 0, "LowCarbon": 0,
             "Family": 0, "Accessibility": 0, "CultureDepth": 0,
             "Indoor": 0, "RiskAversion": 0
         };
 
-        // 狀態管理
-        let currentPreferences = { ...PREFERENCE_DIMENSIONS }; // Global state for preferences
-        let currentQuizStep = 0; // Global state for quiz step
-
-        // --- Local Storage Ops (本地儲存取代 Firebase) ---
-
-        function generateAnonUserId() {
-            // 模擬一個匿名 UID，用於顯示和本地儲存的鍵
-            return 'anon_' + Math.random().toString(36).substring(2, 15);
-        }
-
-        function loadStateFromLocalStorage() {
+        let currentPreferences = { ...PREFERENCE_DIMENSIONS }; 
+        let currentQuizStep = 0; 
+        let directionsService; 
+        let directionsRenderer; 
+        let isMapApiLoaded = false;
+        
+        // [Start] Local Storage Ops
+        const loadStateFromLocalStorage = () => {
             try {
                 const storedState = localStorage.getItem('hakka_quiz_state');
                 if (storedState) {
@@ -284,9 +329,9 @@
                 console.error("Error loading state from localStorage:", e);
             }
             return false;
-        }
+        };
 
-        function saveStateToLocalStorage() {
+        const saveStateToLocalStorage = () => {
             try {
                 const stateToSave = {
                     preferences: currentPreferences,
@@ -297,9 +342,9 @@
             } catch (e) {
                 console.error("Error saving state to localStorage:", e);
             }
-        }
-        
-        function updatePreferenceVector(valString) {
+        };
+
+        const updatePreferenceVector = (valString) => {
             (valString || "").split(',').forEach(item => {
                 if (!item) return;
                 const matches = item.match(/([+-]\d+)([A-Za-z]+)/);
@@ -311,346 +356,76 @@
                     }
                 }
             });
-        }
-        
-        // --- 2. 測驗數據與行程數據 ---
-        
-        // 台三線景點資料庫 (真實景點，模擬 Google Maps 連結)
-        const HAKKA_ATTRACTIONS = [
-            { id: 1, region: "桃園", name: "大溪老街 (Daxi Old Street)", theme: ["Culture", "Indoor", "Pace"], description: "充滿巴洛克式立面建築的歷史街區，適合室內文化探索與慢步調。", map_url: "https://maps.app.goo.gl/yQ9fQ7k7yJ6eLg9v9" },
-            { id: 2, region: "新竹", name: "北埔老街/金廣福公館", theme: ["Culture", "CultureDepth", "Indoor"], description: "北台灣客家文化的中心，必嚐擂茶，適合文史愛好者深度探索。", map_url: "https://maps.app.goo.gl/6E6oN2hV1r9XJz3f7" },
-            { id: 3, region: "新竹", name: "峨眉湖/細茅埔吊橋", theme: ["Outdoor", "LowCarbon", "Pace"], description: "湖畔步道與生態景觀，適合戶外、騎單車的低碳慢活路線。", map_url: "https://maps.app.goo.gl/DkK8Z7yB7N8xT6rD7" },
-            { id: 4, region: "苗栗", name: "獅頭山風景區", theme: ["Outdoor", "CultureDepth", "RiskAversion"], description: "健行步道與古道文化，是挑戰型的戶外登山健行首選。", map_url: "https://maps.app.goo.gl/yP7jXg4Z1b6hC5rP9" },
-            { id: 5, region: "苗栗", name: "南庄老街 (桂花巷)", theme: ["Culture", "Indoor", "Family"], description: "輕鬆逛街、品嚐客家小吃，具備親子友善設施。", map_url: "https://maps.app.goo.gl/wU2aD6yZ9k7qL5xK8" },
-            { id: 6, region: "台中", name: "東勢客家文化園區 (自行車道)", theme: ["LowCarbon", "Outdoor", "Pace"], description: "舊火車站改建，結合鐵道文化與綠色廊道，是單車活動的最佳起點。", map_url: "https://maps.app.goo.gl/Gj8xN4bY5rE2pA3c6" }
-        ];
-
-        // 10 題旅遊偏好問卷及其向量權重
-        const QUIZ_QUESTIONS = {
-            1: {
-                "text": "Q1: 旅程規劃時，比起聊天，您更喜歡安靜做自己的事嗎？",
-                "options": [
-                    { label: "A: 是的，我需要時間獨自沉澱或思考", val: "+3Indoor,+2Pace,-1Outdoor" },
-                    { label: "B: 否，我喜歡與旅伴討論，共同決定", val: "+3Outdoor,-1Indoor,-2Pace" },
-                ]
-            },
-            2: {
-                "text": "Q2: 您覺得能睡飽，比早起趕行程、看美景更重要嗎？",
-                "options": [
-                    { label: "A: 是的，休息是旅行的重點", val: "+3Pace,+2Indoor,-2Outdoor" },
-                    { label: "B: 否，我願意早起把握時間多玩一點", val: "-3Pace,+2Outdoor,+2RiskAversion" },
-                ]
-            },
-            3: {
-                "text": "Q3: 在人多熱鬧的老街或聚會場所，您會感到活力充沛嗎？",
-                "options": [
-                    { label: "A: 是的，我享受社交和人群的熱鬧", val: "-3Indoor,+2Culture,-1Pace" },
-                    { label: "B: 否，我更喜歡安靜的自然或歷史景點", val: "+3Indoor,+2Pace,-2Culture" },
-                ]
-            },
-            4: {
-                "text": "Q4: 您對住宿環境有潔癖，或是在意舒適度嗎？",
-                "options": [
-                    { label: "A: 是的，住宿的品質會影響我的心情", val: "+3Indoor,+2RiskAversion,-1LowCarbon" },
-                    { label: "B: 否，只要有基本功能，便宜即可", val: "-3Indoor,-2RiskAversion,+1LowCarbon" },
-                ]
-            },
-            5: {
-                "text": "Q5: 您喜歡走路，長時間的徒步探索不是問題嗎？",
-                "options": [
-                    { label: "A: 是的，我喜歡用雙腳深度探索", val: "+4Outdoor,+3LowCarbon,+2CultureDepth" },
-                    { label: "B: 否，我偏好搭乘交通工具或短程移動", val: "-3Outdoor,-2LowCarbon,+2Pace" },
-                ]
-            },
-            6: {
-                "text": "Q6: 規劃行程時，您會先考量是否有兒童或長者友善設施嗎？",
-                "options": [
-                    { label: "A: 是的，所有人的舒適度是我的首要考量", val: "+4Family,+4Accessibility,+2RiskAversion" },
-                    { label: "B: 否，我以景點的獨特性和個人興趣為主", val: "-3Family,-3Accessibility,-1RiskAversion" },
-                ]
-            },
-            7: {
-                "text": "Q7: 旅程中遇到突發狀況，您傾向立即啟動備用方案，避免任何風險嗎？",
-                "options": [
-                    { label: "A: 是的，我討厭行程被打亂", val: "+4RiskAversion,+2Indoor,-2Pace" },
-                    { label: "B: 否，我願意隨機應變，甚至接受意外的驚喜", val: "-4RiskAversion,+2Outdoor,+2Pace" },
-                ]
-            },
-            8: {
-                "text": "Q8: 您會設定旅程預算並且實際控管，捨不得花太多錢享受美食嗎？",
-                "options": [
-                    { label: "A: 是的，控制預算比美食享受重要", val: "+3LowCarbon,-3Indoor" },
-                    { label: "B: 否，我蠻捨得花錢享受美食的", val: "-3LowCarbon,+3Indoor" },
-                ]
-            },
-            9: {
-                "text": "Q9: 哪種客庄體驗對您更有吸引力？",
-                "options": [
-                    { label: "A: 參觀客家宗祠，聽宗族遷徙的深度歷史", val: "+4CultureDepth,+3Culture" },
-                    { label: "B: 採茶、農場體驗，親手接觸土地與自然", val: "+4Outdoor,+2LowCarbon" },
-                ]
-            },
-            10: {
-                "text": "Q10: 您喜歡按照規劃好的行程走，不喜歡旅途中變動嗎？",
-                "options": [
-                    { label: "A: 是的，規劃好的路線最有效率", val: "-3Pace,-2RiskAversion,+2CultureDepth" },
-                    { label: "B: 否，我喜歡彈性、即興，隨時改變方向", val: "+3Pace,+2RiskAversion,-2CultureDepth" },
-                ]
-            },
         };
-        const TOTAL_QUIZ_STEPS = Object.keys(QUIZ_QUESTIONS).length; // 總共有 10 題
-
+        // [End] Local Storage Ops
         
-        // --- 3. 訊息 UI 函數 ---
-
-        function addMessage(type, contentHTML, isQuiz = false) {
+        // [Start] UI Helpers
+        const addMessage = (type, contentHTML, isQuiz = false) => {
             const isBot = (type === 'bot' || type === 'quiz');
             const messageDiv = document.createElement('div');
             messageDiv.className = `flex ${isBot ? 'justify-start' : 'justify-end'}`;
             
             const contentDiv = document.createElement('div');
-            // 讓 bot-message 容器自適應內容寬度
             contentDiv.className = `p-3 ${isBot ? 'bot-message' : 'user-message'}`; 
 
             if (isQuiz) {
-                // 測驗訊息使用特殊的卡片樣式
                 contentDiv.classList.add('flex-card', 'bg-white', 'p-4', 'shadow-lg', 'text-gray-800');
-                contentDiv.classList.remove('p-3'); // 移除標準 padding
+                contentDiv.classList.remove('p-3');
             } 
 
             if (isBot && !isQuiz) {
-                // 一般機器人訊息
                 contentDiv.innerHTML = `<i data-lucide="bot" class="w-4 h-4 mr-1 inline-block text-blue-900"></i> ${contentHTML}`;
             } else if (!isBot) {
-                // 用戶訊息
                 contentDiv.innerHTML = contentHTML;
             } else if (isQuiz) {
-                // 測驗訊息，內容已在 createQuizMessage 中結構化
                 contentDiv.innerHTML = contentHTML;
             }
 
             messageDiv.appendChild(contentDiv);
             messagesContainer.appendChild(messageDiv);
             
-            // 修正：確保 lucide 存在
             if (typeof lucide !== 'undefined' && lucide.createIcons) {
                 lucide.createIcons();
             }
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            return contentDiv; // Return the actual message content div
-        }
+            return contentDiv;
+        };
+        // [End] UI Helpers
 
-        // --- 4. 測驗 UI 函數 ---
+        // [Start] Quiz & Itinerary Data
+        const HAKKA_ATTRACTIONS = [
+            { id: 1, region: "桃園", name: "大溪老街 (Daxi Old Street)", theme: ["Culture", "Indoor", "Pace"], description: "充滿巴洛克式立面建築的歷史街區，適合室內文化探索與慢步調。", map_url: "https://maps.app.goo.gl/yQ9fQ7k7yJ6eLg9v9", lat: 24.8722, lng: 121.2882 },
+            { id: 2, region: "新竹", name: "北埔老街/金廣福公館", theme: ["Culture", "CultureDepth", "Indoor"], description: "北台灣客家文化的中心，必嚐擂茶，適合文史愛好者深度探索。", map_url: "https://maps.maps.app.goo.gl/6E6oN2hV1r9XJz3f7", lat: 24.6946, lng: 121.0506 },
+            { id: 3, region: "新竹", name: "峨眉湖/細茅埔吊橋", theme: ["Outdoor", "LowCarbon", "Pace"], description: "湖畔步道與生態景觀，適合戶外、騎單車的低碳慢活路線。", map_url: "https://maps.app.goo.gl/DkK8Z7yB7N8xT6rD7", lat: 24.6865, lng: 121.0425 },
+            { id: 4, region: "苗栗", name: "獅頭山風景區", theme: ["Outdoor", "CultureDepth", "RiskAversion"], description: "健行步道與古道文化，是挑戰型的戶外登山健行首選。", map_url: "https://maps.app.goo.gl/yP7jXg4Z1b6hC5rP9", lat: 24.6468, lng: 120.9702 },
+            { id: 5, region: "苗栗", name: "南庄老街 (桂花巷)", theme: ["Culture", "Indoor", "Family"], description: "輕鬆逛街、品嚐客家小吃，具備親子友善設施。", map_url: "https://maps.app.goo.gl/wU2aD6yZ9k7qL5xK8", lat: 24.5902, lng: 121.0101 },
+            { id: 6, region: "台中", name: "東勢客家文化園區 (自行車道)", theme: ["LowCarbon", "Outdoor", "Pace"], description: "舊火車站改建，結合鐵道文化與綠色廊道，是單車活動的最佳起點。", map_url: "https://maps.app.goo.gl/Gj8xN4bY5rE2pA3c6", lat: 24.2541, lng: 120.8351 }
+        ];
 
-        function createQuizMessage(questionData, currentStep) {
-            const q = questionData.text;
-            const options = questionData.options;
-            
-            let quizHTML = `
-                <div class="text-xs text-gray-500 mb-2">客途 AI 旅伴 - 旅遊偏好問卷 (第 ${currentStep}/${TOTAL_QUIZ_STEPS} 題)</div>
-                <div class="text-lg font-bold text-blue-900 mb-3">${q}</div>
-                <div class="space-y-2">
-            `;
-
-            options.forEach(option => {
-                const nextStep = currentStep + 1;
-                // data 格式模仿 LINE Postback: action=next_quiz&step=2&val=+3Culture,+2CultureDepth
-                const postbackData = `action=next_quiz&step=${nextStep}&val=${option.val}`;
-                
-                // 測驗選項按鈕使用深藍色調
-                quizHTML += `
-                    <button onclick="handlePostback('${postbackData}')" 
-                            class="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm transition duration-150 text-gray-800">
-                        ${option.label}
-                    </button>
-                `;
-            });
-
-            quizHTML += `</div>`;
-            
-            addMessage('quiz', quizHTML, true);
-        }
-        
-        // --- 5. 行程規劃函數 ---
-        function generateHakkaItinerary(userQuery, preferenceVector) {
-            const query = userQuery.toLowerCase();
-            const topPreference = Object.keys(preferenceVector).reduce((a, b) => preferenceVector[a] > preferenceVector[b] ? a : b);
-
-            let candidates = HAKKA_ATTRACTIONS;
-            let regionMatch = '';
-
-            if (query.includes('桃園') || query.includes('龍潭') || query.includes('大溪')) { regionMatch = '桃園'; }
-            else if (query.includes('新竹') || query.includes('峨眉') || query.includes('北埔') || query.includes('關西')) { regionMatch = '新竹'; }
-            else if (query.includes('苗栗') || query.includes('南庄') || query.includes('獅潭')) { regionMatch = '苗栗'; }
-            else if (query.includes('台中') || query.includes('東勢') || query.includes('石岡')) { regionMatch = '台中'; }
-
-            if (regionMatch) {
-                candidates = candidates.filter(att => att.region === regionMatch);
-            }
-            
-            let bestAttraction = candidates.sort((a, b) => {
-                const scoreA = a.theme.includes(topPreference) ? 1 : 0;
-                const scoreB = b.theme.includes(topPreference) ? 1 : 0;
-                return scoreB - scoreA; 
-            })[0] || candidates[Math.floor(Math.random() * candidates.length)]; 
-
-            const C = preferenceVector['Culture'];
-            const O = preferenceVector['Outdoor'];
-            const P = preferenceVector['Pace'];
-            const F = preferenceVector['Family'];
-
-            let title = `【台三線客製化推薦】${bestAttraction.region}主題之旅`;
-            let theme = bestAttraction.theme.includes('Outdoor') ? "戶外自然探索" : "室內文化慢活";
-            
-            if (C > O && C > 5) { theme = "深度文史與客家風情"; }
-            else if (O > C && O > 5) { theme = "山林步道與自然療癒"; }
-            if (P > 0) { theme += ", 慢活步調"; } else { theme += ", 緊湊行程"; }
-            if (F > 5) { theme += ", 親子/無障礙友善"; }
+        const QUIZ_QUESTIONS = {
+            1: { "text": "Q1: 旅程規劃時，比起聊天，您更喜歡安靜做自己的事嗎？", "options": [{ label: "A: 是的，我需要時間獨自沉澱或思考", val: "+3Indoor,+2Pace,-1Outdoor" }, { label: "B: 否，我喜歡與旅伴討論，共同決定", val: "+3Outdoor,-1Indoor,-2Pace" }] },
+            2: { "text": "Q2: 您覺得能睡飽，比早起趕行程、看美景更重要嗎？", "options": [{ label: "A: 是的，休息是旅行的重點", val: "+3Pace,+2Indoor,-2Outdoor" }, { label: "B: 否，我願意早起把握時間多玩一點", val: "-3Pace,+2Outdoor,+2RiskAversion" }] },
+            3: { "text": "Q3: 在人多熱鬧的老街或聚會場所，您會感到活力充沛嗎？", "options": [{ label: "A: 是的，我享受社交和人群的熱鬧", val: "-3Indoor,+2Culture,-1Pace" }, { label: "B: 否，我更喜歡安靜的自然或歷史景點", val: "+3Indoor,+2Pace,-2Culture" }] },
+            4: { "text": "Q4: 您對住宿環境有潔癖，或是在意舒適度嗎？", "options": [{ label: "A: 是的，住宿的品質會影響我的心情", val: "+3Indoor,+2RiskAversion,-1LowCarbon" }, { label: "B: 否，只要有基本功能，便宜即可", val: "-3Indoor,-2RiskAversion,+1LowCarbon" }] },
+            5: { "text": "Q5: 您喜歡走路，長時間的徒步探索不是問題嗎？", "options": [{ label: "A: 是的，我喜歡用雙腳深度探索", val: "+4Outdoor,+3LowCarbon,+2CultureDepth" }, { label: "B: 否，我偏好搭乘交通工具或短程移動", val: "-3Outdoor,-2LowCarbon,+2Pace" }] },
+            6: { "text": "Q6: 規劃行程時，您會先考量是否有兒童或長者友善設施嗎？", "options": [{ label: "A: 是的，所有人的舒適度是我的首要考量", val: "+4Family,+4Accessibility,+2RiskAversion" }, { label: "B: 否，我以景點的獨特性和個人興趣為主", val: "-3Family,-3Accessibility,-1RiskAversion" }] },
+            7: { "text": "Q7: 旅程中遇到突發狀況，您傾向立即啟動備用方案，避免任何風險嗎？", "options": [{ label: "A: 是的，我討厭行程被打亂", val: "+4RiskAversion,+2Indoor,-2Pace" }, { label: "B: 否，我願意隨機應變，甚至接受意外的驚喜", val: "-4RiskAversion,+2Outdoor,+2Pace" }] },
+            8: { "text": "Q8: 您會設定旅程預算並且實際控管，捨不得花太多錢享受美食嗎？", "options": [{ label: "A: 是的，控制預算比美食享受重要", val: "+3LowCarbon,-3Indoor" }, { label: "B: 否，我蠻捨得花錢享受美食的", val: "-3LowCarbon,+3Indoor" }] },
+            9: { "text": "Q9: 哪種客庄體驗對您更有吸引力？", "options": [{ label: "A: 參觀客家宗祠，聽宗族遷徙的深度歷史", val: "+4CultureDepth,+3Culture" }, { label: "B: 採茶、農場體驗，親手接觸土地與自然", val: "+4Outdoor,+2LowCarbon" }] },
+            10: { "text": "Q10: 您喜歡按照規劃好的行程走，不喜歡旅途中變動嗎？", "options": [{ label: "A: 是的，規劃好的路線最有效率", val: "-3Pace,-2RiskAversion,+2CultureDepth" }, { label: "B: 否，我喜歡彈性、即興，隨時改變方向", val: "+3Pace,+2RiskAversion,-2CultureDepth" }] },
+        };
+        const TOTAL_QUIZ_STEPS = Object.keys(QUIZ_QUESTIONS).length; 
+        // [End] Quiz & Itinerary Data
 
 
-            return {
-                "title": title,
-                "theme": theme,
-                "recommendation_reason": `根據您的【${theme}】傾向，小阿客為您精選了台三線最合適的景點。本次行程地點「${bestAttraction.name}」位於${bestAttraction.region}，完全符合您在問卷中展現出的核心偏好。`,
-                "itinerary": [
-                    {
-                        "time": "10:00 - 12:00",
-                        "name": bestAttraction.name,
-                        "description": bestAttraction.description,
-                        "location_url": bestAttraction.map_url
-                    },
-                    {
-                        "time": "12:00 - 13:30",
-                        "name": "在地客家午餐推薦",
-                        "description": P > 0 ? "慢食客庄：推薦尋找巷弄內的老字號客家小館，享受慢食文化。" : "效率午餐：在老街周邊快速品嚐在地粄條或肉圓。",
-                        "location_url": bestAttraction.map_url 
-                    },
-                    {
-                        "time": "14:00 - 16:30",
-                        "name": "周邊特色體驗",
-                        "description": O > C ? "推薦周邊的低碳自行車道或生態農場體驗。" : "推薦在宗祠或歷史街區參與客家DIY（如擂茶、藍染）。",
-                        "location_url": bestAttraction.map_url 
-                    }
-                ],
-                "carbon_footprint_estimate": `${(12 - preferenceVector['LowCarbon']).toFixed(1)} kg CO2e`
-            };
-        }
-        
-        function createItineraryCard(itineraryJson) {
-            let itineraryItemsHTML = '';
-            itineraryJson.itinerary.forEach((item, index) => {
-                itineraryItemsHTML += `
-                    <div class="py-2 border-b border-gray-100 last:border-b-0">
-                        <div class="flex items-center text-sm font-semibold text-gray-700 mb-1">
-                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-amber-500"></i>
-                            ${item.time} - ${item.name}
-                        </div>
-                        <p class="text-xs text-gray-500 pl-6">${item.description}</p>
-                        <a href="${item.location_url}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800 transition duration-150 pl-6 underline flex items-center mt-1">
-                            <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i> Google 地圖
-                        </a>
-                        <!-- 新增：Gemini 深度解說按鈕 -->
-                        <button onclick="handleDeepDive('${item.name}')" class="mt-2 ml-6 text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition duration-150">
-                            ✨ 景點深度解說
-                        </button>
-                    </div>
-                `;
-            });
-            
-            const cardHTML = `
-                <div class="flex-card w-full max-w-sm text-gray-800">
-                    <div class="p-3 color-primary text-white rounded-t-xl">
-                        <div class="text-xl font-bold">${itineraryJson.title}</div>
-                        <div class="text-xs opacity-80 mt-1">主題: ${itineraryJson.theme}</div>
-                    </div>
-                    
-                    <div class="p-4 space-y-3">
-                        <div class="border-b pb-3">
-                            <div class="text-xs font-semibold text-blue-900 mb-1">小阿客推薦理由:</div>
-                            <p class="text-sm">${itineraryJson.recommendation_reason}</p>
-                        </div>
-                        
-                        <div class="text-sm font-bold mt-3">【詳細行程 - 台三線客庄】</div>
-                        ${itineraryItemsHTML}
-
-                        <div class="text-right text-xs text-blue-600 font-medium pt-2">
-                            低碳估算（參考值）: ${itineraryJson.carbon_footprint_estimate}
-                        </div>
-                    </div>
-
-                    <div class="flex p-3 border-t bg-gray-50">
-                        <button onclick="handlePostback('action=get_rain_plan')" class="flex-1 text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
-                            <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
-                        </button>
-                    </div>
-                </div>
-            `;
-            addMessage('bot', cardHTML, true);
-        }
-        
-        // --- 6. 旅型人格生成 (移除圖像 API 呼叫，專注於流程) ---
-
-        async function generatePersonalityMessage(finalPrefs) {
-            const score = (dim) => finalPrefs[dim] || 0;
-
-            let mainPersonality = "";  
-            let traitDescription = ""; 
-            let itineraryFocus = ""; 
-            
-            // 1. 判斷核心維度
-            const outdoorScore = score('Outdoor') - score('Indoor');
-            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5);  
-            const focusScore = score('CultureDepth') * 2 + score('Culture');
-            
-            // 2. 旅型人格分類
-            if (focusScore > 8 && outdoorScore > 0) {
-                mainPersonality = "精緻探索家 (The Cultured Explorer)";
-                traitDescription = "您的基因：**內斂、規劃、知識享受、探索**。您重視旅程的知識性與效率，喜歡深入挖掘文化，並願意花費時間與精力去探索獨特景點。";
-                itineraryFocus = "【精緻探索家】您需要結合**歷史古蹟深度導覽**與**高質量戶外體驗**。您的行程應包含明確的學習目標和高效率的移動，專注於質量而非數量。";
-            } else if (outdoorScore < -4 && score('Pace') > 4) {
-                mainPersonality = "悠活度假客 (The Relaxed Retreat)";
-                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，住宿與美食的品質對您很重要。";
-                itineraryFocus = "【悠活度假客】您應選擇主打**高品質客庄旅宿**、**在地客家慢食**、**室內手作體驗**。您的旅行哲學是『慢下來，享受當下』。";
-            } else if (outdoorScore > 4 && paceScore < -2) {
-                mainPersonality = "行動拓荒者 (The Action Pioneer)";
-                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性。";
-                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡。";
-            } else {
-                mainPersonality = "平和優遊家 (The Harmonious Wanderer)";
-                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境。";
-                itineraryFocus = "【平和優遊家】您適合選擇**交通便利、配套設施完善**的景點（如大型客家文化園區、易達老街），確保行程流暢且所有旅伴都能舒適參與。";
-            }
-            
-            let finalMessageContent = `
-                <div class="p-3 w-full">
-                    <div class="text-xl font-bold text-blue-900 border-b-2 border-blue-900 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
-                    <div class="text-3xl font-extrabold text-amber-600 mb-2 text-center">${mainPersonality}</div>
-                    <div class="text-sm text-gray-700 font-medium mb-4 text-center">${traitDescription}</div>
-                    
-                    <div class="mt-4 pt-3 border-t border-gray-100">
-                        <div class="text-sm font-semibold text-blue-900 mb-1">小阿客的客製化行程建議：</div>
-                        <p class="text-sm text-gray-600">${itineraryFocus}</p>
-                        <p class="mt-3 text-xs text-blue-600">現在請輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
-                    </div>
-                </div>
-            `;
-            
-            // 將最終內容添加到聊天
-            addMessage('quiz', finalMessageContent, true);
-        }
-
-        // --- 7. Gemini API 核心功能 ---
-
-        /**
-         * 呼叫 Gemini API 進行文本生成 (支援 Google Search Grounding)
-         * @param {string} userQuery - 用戶輸入的查詢
-         * @param {string} systemPrompt - 角色和規則設定
-         * @param {boolean} useGrounding - 是否使用 Google Search 進行資料增強
-         * @returns {Promise<{text: string, sources: Array<{uri: string, title: string}>}>}
-         */
-        async function callGeminiAPI(userQuery, systemPrompt, useGrounding = true) {
-            const apiKey = ""; 
+        // [Start] Gemini API
+        const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
+            const apiKey = typeof __gemini_api_key !== 'undefined' ? __gemini_api_key : ""; 
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            if (!apiKey || apiKey === "") {
+                throw new Error("Gemini API Key is missing. Please set the '__gemini_api_key' environment variable.");
+            }
 
             const payload = {
                 contents: [{ parts: [{ text: userQuery }] }],
@@ -696,21 +471,16 @@
                 } catch (error) {
                     attempts++;
                     if (attempts < maxAttempts) {
-                        // 指數退避
                         const delay = Math.pow(2, attempts) * 1000;
-                        await new Promise(resolve => setTimeout(resolve, delay));
+                        await new new Promise(resolve => setTimeout(resolve, delay));
                     } else {
                         throw new Error(`Gemini API call failed after ${maxAttempts} attempts: ${error.message}`);
                     }
                 }
             }
-        }
+        };
 
-        /**
-         * 處理景點深度解說請求 (Gemini LLM)
-         * @param {string} attractionName - 景點名稱
-         */
-        async function handleDeepDive(attractionName) {
+        const handleDeepDive = async (attractionName) => {
             addMessage('user', `✨ 請給我景點【${attractionName}】的深度解說。`);
             
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在透過網路查詢【${attractionName}】的歷史文化背景...`);
@@ -735,23 +505,34 @@
                     ${sourceHTML}
                 `;
                 
-                loadingMessageDiv.innerHTML = responseHTML; // 替換載入中的訊息
+                loadingMessageDiv.innerHTML = responseHTML; 
                 if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
 
             } catch (error) {
                 loadingMessageDiv.innerHTML = `<div class="text-red-600">抱歉，深度解說功能失敗。錯誤訊息: ${error.message}</div>`;
                 console.error("Deep Dive Error:", error);
             }
-        }
+        };
 
-        /**
-         * 處理客庄文化問答 (通用聊天功能)
-         * @param {string} userQuery - 用戶的原始提問
-         */
-        async function handleCultureQA(userQuery) {
+        const knowledgeBase = `
+            以下是從政府資料庫中提取的客庄相關資訊（CSV 摘要）：
+            - 客家美食認證：桃園市共有 20 家餐廳通過客家美食認證，提供正宗的粄條、客家小炒等。這些餐廳致力於保留客家飲食文化。
+            - 優質旅宿：新竹市和苗栗縣有多家合法旅宿資料名冊，特別推薦 2020 桃園金牌好棧，具備高標準的服務和設施。
+            - 文化資源：臺中市的客家文化園區和特定旅遊館提供豐富的文史展示，是深入了解客家拓墾歷史的好去處。
+        `;
+
+        const handleCultureQA = async (userQuery) => {
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在思考您的客庄文化問題...`);
             
-            const systemPrompt = "你是一位專門回答台灣客家文化、歷史、習俗和美食的專家。請根據 Google Search 提供的資訊，用清晰、友善的語氣回答用戶的提問。請使用繁體中文。";
+            // 將本地數據庫內容注入 System Prompt
+            const systemPrompt = `
+                你是一位專門回答台灣客家文化、歷史、習俗和美食的專家。
+                請參考 Google Search 提供的資訊，並優先考量以下本地知識庫的內容進行回答：
+                --- 本地知識庫 ---
+                ${knowledgeBase}
+                ---
+                請用清晰、友善的語氣回答用戶的提問。請使用繁體中文。
+            `;
             
             try {
                 const { text, sources } = await callGeminiAPI(userQuery, systemPrompt, true);
@@ -770,19 +551,274 @@
                     ${sourceHTML}
                 `;
                 
-                loadingMessageDiv.innerHTML = responseHTML; // 替換載入中的訊息
+                loadingMessageDiv.innerHTML = responseHTML; 
                 if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
 
             } catch (error) {
                 loadingMessageDiv.innerHTML = `<div class="text-red-600">抱歉，文化問答功能失敗。錯誤訊息: ${error.message}</div>`;
                 console.error("Culture QA Error:", error);
             }
-        }
+        };
+        // [End] Gemini API
+
+        // [Start] Map Logic
+        const loadGoogleMapsApi = () => {
+            return new Promise((resolve) => {
+                if (isMapApiLoaded) {
+                    resolve();
+                    return;
+                }
+                const script = document.createElement('script');
+                
+                // 從 Canvas 環境變數中獲取 Google Maps 金鑰
+                const mapsApiKey = typeof __google_maps_api_key !== 'undefined' ? __google_maps_api_key : "";
+                
+                if (!mapsApiKey || mapsApiKey === "") {
+                    console.error("Google Maps API Key is missing. Maps functionality will be disabled.");
+                    isMapApiLoaded = false; 
+                    resolve();
+                    return;
+                }
+                
+                script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsApiKey}&callback=initMapPlaceholder&libraries=routes`; 
+                script.async = true;
+                script.defer = true;
+                
+                window.initMapPlaceholder = () => {
+                    isMapApiLoaded = true;
+                    directionsService = new google.maps.DirectionsService();
+                    directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
+                    delete window.initMapPlaceholder;
+                    resolve();
+                };
+                
+                document.head.appendChild(script);
+            });
+        };
+        
+        const showItineraryMap = async (itineraryDataString, mapTitle) => {
+            const mapModal = document.getElementById('map-modal');
+            const mapTitleElement = document.getElementById('map-title');
+            const mapDiv = document.getElementById('map');
+            
+            mapModal.style.display = 'flex';
+            mapTitleElement.textContent = `載入路線: ${mapTitle}...`;
+
+            try {
+                const itinerary = JSON.parse(itineraryDataString);
+                
+                if (itinerary.length < 2) {
+                     mapTitleElement.textContent = `規劃失敗：至少需要兩個景點來繪製路線。`;
+                     return;
+                }
+                
+                await loadGoogleMapsApi();
+
+                if (!isMapApiLoaded || typeof google === 'undefined') {
+                    mapTitleElement.textContent = `地圖載入失敗：API 金鑰可能錯誤或未啟用。`;
+                    return;
+                }
+
+                const origin = { lat: parseFloat(itinerary[0].lat), lng: parseFloat(itinerary[0].lng) };
+                const destination = { lat: parseFloat(itinerary[itinerary.length - 1].lat), lng: parseFloat(itinerary[itinerary.length - 1].lng) };
+                
+                const waypoints = itinerary.slice(1, -1).map(item => ({
+                    location: { lat: parseFloat(item.lat), lng: parseFloat(item.lng) },
+                    stopover: true 
+                }));
+
+                const map = new google.maps.Map(mapDiv, {
+                    zoom: 11,
+                    center: origin, 
+                    mapId: "DEMO_MAP_ID" 
+                });
+                directionsRenderer.setMap(map);
+
+                const startMarker = new google.maps.Marker({
+                    position: origin,
+                    map: map,
+                    title: itinerary[0].name,
+                    label: 'A',
+                    icon: { url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png' }
+                });
+
+                const endMarker = new google.maps.Marker({
+                    position: destination,
+                    map: map,
+                    title: itinerary[itinerary.length - 1].name,
+                    label: 'Z',
+                    icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }
+                });
+
+                directionsService.route({
+                    origin: origin,
+                    destination: destination,
+                    waypoints: waypoints,
+                    optimizeWaypoints: true, 
+                    travelMode: google.maps.TravelMode.DRIVING 
+                }, (response, status) => {
+                    if (status === 'OK') {
+                        directionsRenderer.setDirections(response);
+                        mapTitleElement.textContent = `規劃路線: ${mapTitle}`;
+                    } else {
+                        mapTitleElement.textContent = `路線計算失敗: ${status}`;
+                        console.error('Directions request failed due to ' + status);
+                    }
+                });
+
+            } catch (error) {
+                mapTitleElement.textContent = `地圖載入失敗: ${error.message}`;
+                console.error("Google Maps failed to load or initialize:", error);
+            }
+        };
+        
+        const hideMap = () => {
+            document.getElementById('map-modal').style.display = 'none';
+        };
+        // [End] Map Logic
+
+        // [Start] Main Logic
+        const createQuizMessage = (questionData, currentStep) => {
+            const q = questionData.text;
+            const options = questionData.options;
+            
+            let quizHTML = `
+                <div class="text-xs text-gray-500 mb-2">客途 AI 旅伴 - 旅遊偏好問卷 (第 ${currentStep}/${TOTAL_QUIZ_STEPS} 題)</div>
+                <div class="text-lg font-bold text-blue-900 mb-3">${q}</div>
+                <div class="space-y-2">
+            `;
+
+            options.forEach(option => {
+                const nextStep = currentStep + 1;
+                const postbackData = `action=next_quiz&step=${nextStep}&val=${option.val}`;
+                
+                quizHTML += `
+                    <button onclick="handlePostback('${postbackData}')" 
+                            class="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm transition duration-150 text-gray-800">
+                        ${option.label}
+                    </button>
+                `;
+            });
+
+            quizHTML += `</div>`;
+            
+            addMessage('quiz', quizHTML, true);
+        };
+
+        const createItineraryCard = (itineraryJson) => {
+            let itineraryItemsHTML = '';
+            itineraryJson.itinerary.forEach((item, index) => {
+                itineraryItemsHTML += `
+                    <div class="py-2 border-b border-gray-100 last:border-b-0">
+                        <div class="flex items-center text-sm font-semibold text-gray-700 mb-1">
+                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-amber-500"></i>
+                            ${item.time} - ${item.name}
+                        </div>
+                        <p class="text-xs text-gray-500 pl-6">${item.description}</p>
+                        <a href="${item.location_url}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800 transition duration-150 pl-6 underline flex items-center mt-1">
+                            <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i> Google 地圖
+                        </a>
+                        <!-- 新增：Gemini 深度解說按鈕 -->
+                        <button onclick="handleDeepDive('${item.name}')" class="mt-2 ml-6 text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition duration-150">
+                            ✨ 景點深度解說
+                        </button>
+                    </div>
+                `;
+            });
+            
+            const itineraryDataString = JSON.stringify(itineraryJson.itinerary.map(item => ({
+                name: item.name,
+                lat: item.lat,
+                lng: item.lng
+            })));
+            const mapTitle = itineraryJson.title;
 
 
-        // --- 8. 事件處理 (更新) ---
+            const cardHTML = `
+                <div class="flex-card w-full max-w-sm text-gray-800">
+                    <div class="p-3 color-primary text-white rounded-t-xl">
+                        <div class="text-xl font-bold">${itineraryJson.title}</div>
+                        <div class="text-xs opacity-80 mt-1">主題: ${itineraryJson.theme}</div>
+                    </div>
+                    
+                    <div class="p-4 space-y-3">
+                        <div class="border-b pb-3">
+                            <div class="text-xs font-semibold text-blue-900 mb-1">小阿客推薦理由:</div>
+                            <p class="text-sm">${itineraryJson.recommendation_reason}</p>
+                        </div>
+                        
+                        <div class="text-sm font-bold mt-3">【詳細行程 - 台三線客庄】</div>
+                        ${itineraryItemsHTML}
 
-        async function handlePostback(data) {
+                        <div class="text-right text-xs text-blue-600 font-medium pt-2">
+                            低碳估算（參考值）: ${itineraryJson.carbon_footprint_estimate}
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col p-3 border-t bg-gray-50 space-y-2">
+                        <!-- 地圖按鈕 (呼叫新的路線繪製功能) -->
+                        <button onclick="showItineraryMap('${itineraryDataString.replace(/'/g, "\\'")}', '${mapTitle}')" class="w-full text-center py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition duration-200 shadow-md">
+                            <i data-lucide="map" class="w-4 h-4 inline-block mr-1"></i> 查看完整路線地圖
+                        </button>
+                        <!-- 雨天備案按鈕 -->
+                        <button onclick="handlePostback('action=get_rain_plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
+                            <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
+                        </button>
+                    </div>
+                </div>
+            `;
+            addMessage('bot', cardHTML, true);
+        };
+        
+        const generatePersonalityMessage = async (finalPrefs) => {
+            const score = (dim) => finalPrefs[dim] || 0;
+
+            let mainPersonality = "";  
+            let traitDescription = ""; 
+            let itineraryFocus = ""; 
+            
+            const outdoorScore = score('Outdoor') - score('Indoor');
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5);  
+            const focusScore = score('CultureDepth') * 2 + score('Culture');
+            
+            if (focusScore > 8 && outdoorScore > 0) {
+                mainPersonality = "精緻探索家 (The Cultured Explorer)";
+                traitDescription = "您的基因：**內斂、規劃、知識享受、探索**。您重視旅程的知識性與效率，喜歡深入挖掘文化，並願意花費時間與精力去探索獨特景點。";
+                itineraryFocus = "【精緻探索家】您需要結合**歷史古蹟深度導覽**與**高質量戶外體驗**。您的行程應包含明確的學習目標和高效率的移動，專注於質量而非數量。";
+            } else if (outdoorScore < -4 && score('Pace') > 4) {
+                mainPersonality = "悠活度假客 (The Relaxed Retreat)";
+                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，住宿與美食的品質對您很重要。";
+                itineraryFocus = "【悠活度假客】您應選擇主打**高品質客庄旅宿**、**在地客家慢食**、**室內手作體驗**。您的旅行哲學是『慢下來，享受當下』。";
+            } else if (outdoorScore > 4 && paceScore < -2) {
+                mainPersonality = "行動拓荒者 (The Action Pioneer)";
+                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性。";
+                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡。";
+            } else {
+                mainPersonality = "平和優遊家 (The Harmonious Wanderer)";
+                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境。";
+                itineraryFocus = "【平和優遊家】您適合選擇**交通便利、配套設施完善**的景點（如大型客家文化園區、易達老街），確保行程流暢且所有旅伴都能舒適參與。";
+            }
+            
+            let finalMessageContent = `
+                <div class="p-3 w-full">
+                    <div class="text-xl font-bold text-blue-900 border-b-2 border-blue-900 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
+                    <div class="text-3xl font-extrabold text-amber-600 mb-2 text-center">${mainPersonality}</div>
+                    <div class="text-sm text-gray-700 font-medium mb-4 text-center">${traitDescription}</div>
+                    
+                    <div class="mt-4 pt-3 border-t border-gray-100">
+                        <div class="text-sm font-semibold text-blue-900 mb-1">小阿客的客製化行程建議：</div>
+                        <p class="text-sm text-gray-600">${itineraryFocus}</p>
+                        <p class="mt-3 text-xs text-blue-600">現在請輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
+                    </div>
+                </div>
+            `;
+            
+            addMessage('quiz', finalMessageContent, true);
+        };
+        // [End] Main Logic
+
+        // [Start] Event Handlers
+        const handlePostback = async (data) => {
             const params = new URLSearchParams(data);
             const action = params.get('action');
 
@@ -806,11 +842,10 @@
             } else if (action === 'get_rain_plan') {
                 addMessage('bot', '好的，小阿客收到雨天備案請求！若遇下雨，建議將戶外步道改為參觀附近的**客家文化會館**或**室內DIY體驗**（如米食製作）。');
             }
-        }
+        };
 
-        async function handleMessage(text) {
+        const handleMessage = async (text) => {
             
-            // 模擬用戶發送訊息
             addMessage('user', text);
 
             const isRestart = text === "重新測驗" || text === "開始問卷";
@@ -823,7 +858,6 @@
                 saveStateToLocalStorage();
             }
 
-            // 1. 測驗流程
             if (currentQuizStep === 0) {
                 if (isPlanning && !isRestart) {
                     addMessage('bot', "小阿客了解您的需求！請先點擊「開始問卷」按鈕，完成 **10 題客庄旅遊問卷**，以獲得最客製化的行程建議。");
@@ -836,12 +870,10 @@
                 return;
             }
 
-            // 2. 規劃流程 (必須完成測驗)
             if (isPlanning && isFinished) {
                 try {
                     addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
-                    // 模擬 1.5 秒延遲來模擬 RAG/LLM 呼叫時間
                     setTimeout(() => {
                         const itineraryJson = generateHakkaItinerary(text, currentPreferences);
                         createItineraryCard(itineraryJson);
@@ -851,60 +883,33 @@
                     addMessage('bot', `對不起，行程規劃系統出現錯誤: ${e.message}`);
                     console.error("行程規劃錯誤:", e);
                 }
-            // 3. 文化問答 (通用 LLM 功能)
             } else if (isFinished || (currentQuizStep > 0 && !isPlanning)) {
-                // 如果已完成測驗 OR 正在測驗但輸入非測驗答案，則視為通用問答
                 if (text.length > 5 && !text.includes('顯示結果')) {
                      await handleCultureQA(text);
                 } else if (!isFinished) {
                      addMessage('bot', `請先回答目前的第 ${currentQuizStep} 題，才能繼續喔！`);
                 }
             }
-        }
+        };
 
-        function sendMessage() {
+        const sendMessage = () => {
             const text = userInput.value.trim();
             if (text) {
                 handleMessage(text);
-                userInput.value = ''; // 清空輸入框
+                userInput.value = ''; 
             }
-        }
+        };
+        // [End] Event Handlers
+
+        // [Start] App Initialization
+        const generateAnonUserId = () => {
+            return 'anon_' + Math.random().toString(36).substring(2, 15);
+        };
         
-        // --- 全域曝光函式以解決 ReferenceError ---
-        window.handleMessage = handleMessage;
-        window.handlePostback = handlePostback;
-        window.sendMessage = sendMessage;
-        window.handleDeepDive = handleDeepDive; // 曝光新的 LLM 函數
-        window.startApp = startApp; 
-
-
-        // --- 9. 網頁載入初始化 ---
-        function initializeApp() {
-            // 1. 綁定全域函式 (解決 ReferenceError)
-            window.handleMessage = handleMessage;
-            window.handlePostback = handlePostback;
-            window.sendMessage = sendMessage;
-            window.handleDeepDive = handleDeepDive; // 曝光新的 LLM 函數
-            window.startApp = startApp; 
-
-            // 2. 初始狀態載入
-            loadStateFromLocalStorage();
-
-            // 3. 綁定 Splash Screen 按鈕
-            document.getElementById('start-button').addEventListener('click', startApp);
-
-            // 4. 確保 Lucide Icons 初始渲染
-            if (typeof lucide !== 'undefined' && lucide.createIcons) {
-                lucide.createIcons();
-            }
-        }
-
-        // --- 應用程式主邏輯 (由 Splash Screen 呼叫) ---
-        function startApp() {
+        const startApp = () => {
             const splash = document.getElementById('splash-screen');
             const app = document.getElementById('app-container');
             
-            // 轉場動畫：淡出 Splash Screen，淡入 App 介面
             splash.style.animation = 'fadeOut 0.5s ease-in forwards';
             
             setTimeout(() => {
@@ -912,25 +917,19 @@
                 app.style.display = 'flex';
                 app.style.animation = 'fadeIn 0.5s ease-out';
                 
-                // 啟動聊天介面初始化
-                
-                // 1. 初始問候語
                 addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
                                     我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>
                                     為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`);
                 
-                // 2. 顯示 ID 和影片提示
                 userIdDisplay.innerHTML = generateAnonUserId(); 
+                displayApiKeyStatus(); 
                 addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在側邊欄載入，歡迎觀賞！)`);
                 
-                // 3. 根據狀態決定顯示按鈕或直接顯示結果
                 if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
-                    // 如果已經有結果，直接顯示
                     setTimeout(async () => {
                          await generatePersonalityMessage(currentPreferences);
                     }, 500);
                 } else {
-                    // 顯示開始按鈕 (模擬 Rich Menu 互動)
                     setTimeout(() => {
                         const quizStartButton = `
                             <div class="w-full text-center">
@@ -942,12 +941,58 @@
                         addMessage('quiz', quizStartButton, true);
                     }, 500);
                 }
-            }, 500); // 確保淡出動畫完成
-        }
+            }, 500); 
+        };
+        
+        const displayApiKeyStatus = () => {
+            const geminiKey = typeof __gemini_api_key !== 'undefined' && __gemini_api_key;
+            const mapsKey = typeof __google_maps_api_key !== 'undefined' && __google_maps_api_key;
+            const motcId = typeof __motc_app_id !== 'undefined' && __motc_app_id;
+            const motcKey = typeof __motc_app_key !== 'undefined' && __motc_app_key;
+
+            const updateStatus = (id, hasKey) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+                
+                const name = element.textContent.split(' ')[1];
+                if (hasKey) {
+                    element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已載入)`;
+                } else {
+                    element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (未載入)`;
+                }
+            };
+
+            updateStatus('status-gemini', !!geminiKey);
+            updateStatus('status-maps', !!mapsKey);
+            updateStatus('status-motc', !!motcId && !!motcKey);
+            
+            if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
+        };
+
+        // 綁定全域函式
+        window.handleMessage = handleMessage;
+        window.handlePostback = handlePostback;
+        window.sendMessage = sendMessage;
+        window.handleDeepDive = handleDeepDive; 
+        window.startApp = startApp; 
+        window.showItineraryMap = showItineraryMap; 
+        window.hideMap = hideMap;
 
 
         // --- 9. 網頁載入初始化 ---
-        document.addEventListener('DOMContentLoaded', initializeApp);
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            loadStateFromLocalStorage();
+
+            document.getElementById('start-button').addEventListener('click', startApp);
+
+            if (typeof lucide !== 'undefined' && lucide.createIcons) {
+                lucide.createIcons();
+            }
+            
+            displayApiKeyStatus();
+        });
 
     </script>
 </body>
