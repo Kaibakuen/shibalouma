@@ -312,6 +312,7 @@
         // [1] Cloud Run 代理服務網址 (用於 Gemini/MOTC - 後端已部署成功)
         const CLOUD_RUN_BASE_URL = "https://shiba-732853956066.asia-east1.run.app"; 
         // [2] Google Maps 金鑰 (唯一需要留在前端的公開金鑰 - 必須由您填寫)
+        // 這是 Google Maps API 的公開金鑰，用於地圖相關功能
         const GOOGLE_MAPS_API_KEY = "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo"; 
         // ----------------------------------------------------
         
@@ -456,33 +457,62 @@
                 use_grounding: useGrounding,
             };
 
-            const response = await fetch(PROXY_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            // 實作指數退避 (Exponential Backoff) 重試機制
+            const MAX_RETRIES = 3;
+            let lastError = null;
 
-            if (!response.ok) {
+            for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    const errorBody = await response.json();
-                    throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '無法連接到 Cloud Run 代理服務。'}`);
-                } catch (e) {
-                     // 這邊是處理 CORS 或後端完全未啟動的情況
-                     throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
+                    const response = await fetch(PROXY_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        // Attempt to parse JSON error message
+                        try {
+                            const errorBody = await response.json();
+                            throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '後端回傳錯誤碼。'}`);
+                        } catch (e) {
+                            // If JSON parsing fails (e.g., 502/503 HTML error page from load balancer)
+                            throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
+                        }
+                    }
+                    
+                    const result = await response.json();
+                    const candidate = result.candidates?.[0];
+                    const text = candidate?.content?.parts?.[0]?.text;
+                    let sources = [];
+                    
+                    const groundingMetadata = candidate?.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }));
+                    }
+                    
+                    return { text, sources };
+                } catch (error) {
+                    lastError = error;
+                    
+                    // 修正點：針對 Failed to fetch (網路錯誤) 提供更明確的提示
+                    if (error instanceof TypeError) {
+                        lastError = new Error(`網路連線失敗 (TypeError)：請確認 Cloud Run 代理服務網址 [${CLOUD_RUN_BASE_URL}] 是否正確且已啟動。`);
+                    } else if (error.message.includes('代理服務錯誤') || error.message.includes('連線失敗')) {
+                        // Keep detailed message for HTTP errors
+                        lastError = error;
+                    } else {
+                        // Catch all other unexpected errors
+                        lastError = new Error(`未預期的錯誤: ${error.message}. 請檢查控制台。`);
+                    }
+
+                    // 如果不是最後一次嘗試，等待並重試 (1s, 2s, 4s)
+                    if (i < MAX_RETRIES - 1) {
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
                 }
             }
-            
-            const result = await response.json();
-            const candidate = result.candidates?.[0];
-            const text = candidate?.content?.parts?.[0]?.text;
-            let sources = [];
-            
-            const groundingMetadata = candidate?.groundingMetadata;
-            if (groundingMetadata && groundingMetadata.groundingAttributions) {
-                sources = groundingMetadata.groundingAttributions.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }));
-            }
-            
-            return { text, sources };
+            throw lastError; // 拋出最後一次錯誤
         };
 
         const handleDeepDive = async (attractionName) => {
@@ -527,6 +557,7 @@
         `;
 
         const handleCultureQA = async (userQuery) => {
+            // 處理一般文化問答，並連結到內建知識庫
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在思考您的客庄文化問題...`);
             
             // 將本地數據庫內容注入 System Prompt
@@ -639,7 +670,8 @@
                 });
                 directionsRenderer.setMap(map);
 
-                const startMarker = new google.maps.Marker({
+                // Start Marker (A)
+                new google.maps.Marker({
                     position: origin,
                     map: map,
                     title: itinerary[0].name,
@@ -647,7 +679,8 @@
                     icon: { url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png' }
                 });
 
-                const endMarker = new google.maps.Marker({
+                // End Marker (Z)
+                new google.maps.Marker({
                     position: destination,
                     map: map,
                     title: itinerary[itinerary.length - 1].name,
@@ -731,6 +764,7 @@
                 `;
             });
             
+            // 處理 JSON 格式，以便傳遞給 showItineraryMap 函數
             const itineraryDataString = JSON.stringify(itineraryJson.itinerary.map(item => ({
                 name: item.name,
                 lat: item.lat,
@@ -778,12 +812,12 @@
         const generatePersonalityMessage = async (finalPrefs) => {
             const score = (dim) => finalPrefs[dim] || 0;
 
-            let mainPersonality = "";  
+            let mainPersonality = ""; 
             let traitDescription = ""; 
             let itineraryFocus = ""; 
             
             const outdoorScore = score('Outdoor') - score('Indoor');
-            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5);  
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5); 
             const focusScore = score('CultureDepth') * 2 + score('Culture');
             
             if (focusScore > 8 && outdoorScore > 0) {
@@ -946,128 +980,7 @@
 
             if (isPlanning && isFinished) {
                 try {
-                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
+                    const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
                     // Call proxy to generate itinerary (simulated on client for now)
-                    // 實際應用中，這個延遲將被實際的 callGeminiAPI(itinerary generation)取代
-                    setTimeout(() => {
-                        const itineraryJson = generateHakkaItinerary(text, currentPreferences);
-                        createItineraryCard(itineraryJson);
-                    }, 1500);
-
-                } catch (e) {
-                    addMessage('bot', `對不起，行程規劃系統出現錯誤: ${e.message}`);
-                    console.error("行程規劃錯誤:", e);
-                }
-            } else if (isFinished || (currentQuizStep > 0 && !isPlanning)) {
-                if (text.length > 5 && !text.includes('顯示結果')) {
-                     await handleCultureQA(text);
-                } else if (!isFinished) {
-                     addMessage('bot', `請先回答目前的第 ${currentQuizStep} 題，才能繼續喔！`);
-                }
-            }
-        };
-
-        const sendMessage = () => {
-            const text = userInput.value.trim();
-            if (text) {
-                handleMessage(text);
-                userInput.value = ''; 
-            }
-        };
-        // [End] Event Handlers
-
-        // [Start] App Initialization
-        const generateAnonUserId = () => {
-            return 'anon_' + Math.random().toString(36).substring(2, 15);
-        };
-        
-        const startApp = () => {
-            const splash = document.getElementById('splash-screen');
-            const app = document.getElementById('app-container');
-            
-            splash.style.animation = 'fadeOut 0.5s ease-in forwards';
-            
-            setTimeout(() => {
-                splash.style.display = 'none';
-                app.style.display = 'flex';
-                app.style.animation = 'fadeIn 0.5s ease-out';
-                
-                addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
-                                    我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>
-                                    為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`);
-                
-                userIdDisplay.innerHTML = generateAnonUserId(); 
-                displayApiKeyStatus(); 
-                addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在側邊欄載入，歡迎觀賞！)`);
-                
-                if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
-                    setTimeout(async () => {
-                         await generatePersonalityMessage(currentPreferences);
-                    }, 500);
-                } else {
-                    setTimeout(() => {
-                        const quizStartButton = `
-                            <div class="w-full text-center">
-                                <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
-                                    點我開始問卷！
-                                </button>
-                            </div>
-                        `;
-                        addMessage('quiz', quizStartButton, true);
-                    }, 500);
-                }
-            }, 500); 
-        };
-        
-        const displayApiKeyStatus = () => {
-            // 檢查 Cloud Run 網址和 Google Maps 金鑰
-            const cloudRunSet = CLOUD_RUN_BASE_URL.startsWith("https://");
-            const mapsKey = GOOGLE_MAPS_API_KEY !== "請貼上您的 Google Maps 金鑰";
-            
-            const updateStatus = (id, isConnected, name) => {
-                const element = document.getElementById(id);
-                if (!element) return;
-                
-                if (isConnected) {
-                     element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已連線)`;
-                } else {
-                     element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (請設定金鑰)`;
-                }
-            };
-
-            updateStatus('status-gemini', cloudRunSet, 'Gemini AI');
-            updateStatus('status-maps', mapsKey, 'Google Maps');
-            updateStatus('status-motc', cloudRunSet, 'MOTC 交通');
-            
-            if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
-        };
-
-        // 綁定全域函式
-        window.handleMessage = handleMessage;
-        window.handlePostback = handlePostback;
-        window.sendMessage = sendMessage;
-        window.handleDeepDive = handleDeepDive; 
-        window.startApp = startApp; 
-        window.showItineraryMap = showItineraryMap; 
-        window.hideMap = hideMap;
-
-
-        // --- 9. 網頁載入初始化 ---
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            
-            loadStateFromLocalStorage();
-
-            document.getElementById('start-button').addEventListener('click', startApp);
-
-            if (typeof lucide !== 'undefined' && lucide.createIcons) {
-                lucide.createIcons();
-            }
-            
-            displayApiKeyStatus();
-        });
-
-    </script>
-</body>
-</html>
+                    // 實際應用中，這個延遲將被實際的 callGem
