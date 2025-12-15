@@ -47,9 +47,8 @@
             background-color: #103561; /* 深藍色背景 */
             color: white;
             z-index: 1000;
-            animation: fadeIn 0.5s ease-out;
         }
-        #splash-image-container { /* 影片容器更名 */
+        #splash-video-container {
             width: 90%;
             max-width: 300px;
             margin-bottom: 2rem;
@@ -57,11 +56,10 @@
             overflow: hidden;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
         }
-        #splash-image { /* 影片替換為圖片 */
+        #splash-video {
             display: block;
             width: 100%;
             height: auto;
-            object-fit: cover;
         }
         
         /* ------------------------ */
@@ -145,15 +143,46 @@
             }
         }
         
-        /* 吉祥物圖片調整 */
-        #mascot-image {
+        /* 吉祥物影片調整 */
+        #mascot-video {
             width: 100%;
             height: auto;
             max-height: 250px; 
             object-fit: cover;
             border-radius: 8px;
         }
-        /* 移除影片相關 CSS */
+        /* 隱藏原生 video 控件 */
+        #splash-video::-webkit-media-controls,
+        #mascot-video::-webkit-media-controls { display: none !important; }
+        #splash-video,
+        #mascot-video { pointer-events: none; }
+
+        /* 地圖模態視窗樣式 */
+        #map-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        #map-container {
+            width: 90%;
+            max-width: 800px;
+            height: 80%;
+            background-color: white;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        #map {
+            width: 100%;
+            height: calc(100% - 40px); /* 留出關閉按鈕空間 */
+        }
     </style>
 </head>
 <body class="p-0 flex flex-col items-center justify-center min-h-screen">
@@ -163,9 +192,12 @@
         <h1 class="text-4xl font-extrabold mb-4 animate-pulse">客途 AI 旅伴</h1>
         <p class="text-lg opacity-80 mb-8">台三線客庄生態博物館</p>
 
-        <!-- 修正點：使用佔位圖片取代外部影片 -->
-        <div id="splash-image-container">
-            <img id="splash-image" src="https://placehold.co/300x200/103561/ffffff?text=小阿客吉祥物" alt="吉祥物圖片" class="w-full h-auto rounded-lg"/>
+        <div id="splash-video-container">
+            <!-- 還原影片連結 -->
+            <video id="splash-video" autoplay loop muted playsinline>
+                <source src="asset/video/1213.mp4" type="video/mp4">
+                您的瀏覽器不支援影片標籤。
+            </video>
         </div>
 
         <button id="start-button" 
@@ -208,10 +240,13 @@
                     </div>
                 </div>
                 
-                <!-- 修正點：使用佔位圖片取代外部影片 -->
+                <!-- 還原影片連結 -->
                 <div class="text-center">
                     <p class="text-xs opacity-70 mb-2">吉祥物：小阿客</p>
-                    <img id="mascot-image" src="https://placehold.co/300x200/103561/ffffff?text=小阿客吉祥物" alt="吉祥物圖片" class="w-full h-auto rounded-lg"/>
+                    <video id="mascot-video" autoplay loop muted playsinline>
+                        <source src="asset/video/1213.mp4" type="video/mp4">
+                        您的瀏覽器不支援影片標籤。
+                    </video>
                 </div>
             </div>
 
@@ -271,19 +306,21 @@
     <script>
         
         // ----------------------------------------------------
-        // ❗❗❗ 第 0 步：設定 API 連線 ❗❗❗
+        // ❗❗❗ 第 0 步：設定 API 連線 - 所有金鑰已移到前端 ❗❗❗
         // ----------------------------------------------------
-        // [1] Gemini API 終端點 (用於 Canvas 測試 - 繞過您部署的 Cloud Run 服務)
-        // 這是 Google Generative Language API 的終端點，Canvas 會自動填入金鑰
-        const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=";
-        const CLOUD_RUN_BASE_URL = GEMINI_API_ENDPOINT; // 假裝這是您的 URL
+        // [1] Gemini API 資訊
+        const GEMINI_API_KEY = "AIzaSyCrY3D5a_PRNuyx_ymqH5AU7XlUogM6N2M";
+        const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
         
-        // [2] Google Maps 金鑰 (唯一需要留在前端的公開金鑰 - 必須由您填寫)
+        // [2] Google Maps 金鑰
         const GOOGLE_MAPS_API_KEY = "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo"; 
-        // ----------------------------------------------------
         
-        // PROXY_API_URL 現在直接指向 Gemini API
-        const PROXY_API_URL = GEMINI_API_ENDPOINT;
+        // [3] MOTC 交通資訊
+        const MOTC_APP_ID = "U1158028-99d98f63-dc86-480d";
+        const MOTC_APP_KEY = "a523ea8a-7464-48ef-b589-3a4a0bfd1990";
+        
+        // 最終 API 終端點 (直接呼叫 Google API)
+        const FINAL_GEMINI_ENDPOINT = `${GEMINI_API_BASE_URL}?key=${GEMINI_API_KEY}`;
         
         // --- 核心變數和函式定義 ---
 
@@ -303,9 +340,6 @@
         let directionsRenderer; 
         let isMapApiLoaded = false;
         
-        // 移除不必要的 isAiServiceReady 函數，因為我們現在直接使用工作中的 API
-        // const isAiServiceReady = () => { /* ... */ };
-
         // [Start] Local Storage Ops
         const loadStateFromLocalStorage = () => {
             try {
@@ -411,7 +445,8 @@
 
         // [Start] Gemini API
         /**
-         * 呼叫 Gemini API (直接呼叫 Google Generative Language API)
+         * 呼叫 Gemini API (使用 Canvas 內建的 API Key)
+         * 修正點：切換為直接呼叫 Google Generative Language API
          */
         const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
             
@@ -422,15 +457,14 @@
                 tools: useGrounding ? [{ "google_search": {} }] : undefined,
             };
 
-
             // 實作指數退避 (Exponential Backoff) 重試機制
             const MAX_RETRIES = 3;
             let lastError = null;
 
             for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    // PROXY_API_URL 現在是直接的 Gemini API 終端點
-                    const response = await fetch(PROXY_API_URL, {
+                    // 修正：直接呼叫 Canvas 可用的終端點，並使用硬編碼的 GEMINI_API_KEY
+                    const response = await fetch(`${GEMINI_API_BASE_URL}?key=${GEMINI_API_KEY}`, { 
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -459,14 +493,12 @@
                 } catch (error) {
                     lastError = error;
                     
-                    // 修正點：針對 Failed to fetch (網路錯誤) 提供更明確的提示
                     if (error instanceof TypeError) {
                         lastError = new Error(`網路連線失敗 (TypeError)：請確認網路或 API 終端點配置。`);
                     } else {
                         lastError = error;
                     }
 
-                    // 如果不是最後一次嘗試，等待並重試 (1s, 2s, 4s)
                     if (i < MAX_RETRIES - 1) {
                         const delay = Math.pow(2, i) * 1000;
                         await new Promise(resolve => setTimeout(resolve, delay));
@@ -774,7 +806,7 @@
                             <i data-lucide="map" class="w-4 h-4 inline-block mr-1"></i> 查看完整路線地圖
                         </button>
                         <!-- 雨天備案按鈕 -->
-                        <button onclick="handlePostback('action=get_rain-plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
+                        <button onclick="handlePostback('action=get_rain_plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
                             <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
                         </button>
                     </div>
@@ -1042,10 +1074,11 @@
         };
         
         const displayApiKeyStatus = () => {
-            // 檢查 Cloud Run 網址和 Google Maps 金鑰
-            // 修正點：狀態檢查現在假設 Gemini 是連線的，因為我們正在使用可連線的終端點
-            const mapsKey = GOOGLE_MAPS_API_KEY !== "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo" && GOOGLE_MAPS_API_KEY.length > 5;
-            
+            // 檢查 API 金鑰是否已設定
+            const isGeminiSet = GEMINI_API_KEY && GEMINI_API_KEY.length > 5;
+            const isMapsSet = GOOGLE_MAPS_API_KEY && GOOGLE_MAPS_API_KEY.length > 5;
+            const isMotcSet = MOTC_APP_ID && MOTC_APP_KEY;
+
             const updateStatus = (id, isConnected, name) => {
                 const element = document.getElementById(id);
                 if (!element) return;
@@ -1057,10 +1090,9 @@
                 }
             };
 
-            // 修正點：現在將 Gemini/MOTC 標記為已連線，因為我們正在使用可連線的 API
-            updateStatus('status-gemini', true, 'Gemini AI');
-            updateStatus('status-maps', mapsKey, 'Google Maps');
-            updateStatus('status-motc', true, 'MOTC 交通 (AI 模擬)');
+            updateStatus('status-gemini', isGeminiSet, 'Gemini AI');
+            updateStatus('status-maps', isMapsSet, 'Google Maps');
+            updateStatus('status-motc', isMotcSet, 'MOTC 交通');
             
             if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
         };
