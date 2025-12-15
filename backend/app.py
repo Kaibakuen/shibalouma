@@ -99,7 +99,7 @@ def generate_map_image():
 
         # 根據行程數據建立詳細的圖像生成提示
         stops = [f"【地點 {i+1}】: {item['name']}" for i, item in enumerate(itinerary_data)]
-        stops_list = ", ".join(stops)
+        stops_list = ", 與 ".join(stops)
         
         # 提示詞要求可愛手繪、水彩風格，並標註中文地名
         prompt = (
