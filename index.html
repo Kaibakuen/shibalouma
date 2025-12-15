@@ -445,7 +445,7 @@
 
         // [Start] Gemini API
         /**
-         * 呼叫 Gemini API (使用 Canvas 內建的 API Key)
+         * 呼叫 Gemini API (使用前端硬編碼的金鑰)
          */
         const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
             
@@ -462,7 +462,7 @@
 
             for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    // 修正：直接呼叫 Canvas 可用的終端點，並使用硬編碼的 GEMINI_API_KEY
+                    // 修正：直接呼叫 FINAL_GEMINI_ENDPOINT (已包含金鑰)
                     const response = await fetch(FINAL_GEMINI_ENDPOINT, { 
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -470,12 +470,26 @@
                     });
 
                     if (!response.ok) {
+                        const status = response.status;
+                        let errorMessage = `連線失敗 (狀態碼: ${status})。`;
+                        let errorBody = {};
+
                         try {
-                            const errorBody = await response.json();
-                            throw new Error(`API 錯誤: ${response.status} - ${errorBody.error?.message || '未知錯誤碼。'}`);
+                            errorBody = await response.json();
+                            if (errorBody && errorBody.error) {
+                                errorMessage = `API 錯誤: ${status} - ${errorBody.error.message || '未知錯誤碼。'} (通常是金鑰/網域限制)`
+                            }
                         } catch (e) {
-                            throw new Error(`連線失敗 (狀態碼: ${response.status})。`);
+                            // Non-JSON response (e.g., 403 Forbidden plain text)
+                            const rawText = await response.text();
+                            errorMessage = `API 錯誤: ${status} - (非 JSON 響應)。原始文本: ${rawText.substring(0, 50)}...`;
                         }
+
+                        // 輸出詳細診斷信息到 Console
+                        console.error("Gemini API 原始錯誤響應 - 狀態:", status);
+                        console.error("Gemini API 原始錯誤響應 - 主體:", errorBody || "無法解析");
+
+                        throw new Error(errorMessage);
                     }
                     
                     const result = await response.json();
@@ -492,7 +506,7 @@
                 } catch (error) {
                     lastError = error;
                     
-                    if (error instanceof TypeError) {
+                    if (error instanceof TypeError && !String(error).includes('API')) {
                         lastError = new Error(`網路連線失敗 (TypeError)：請確認網路或 API 終端點配置。`);
                     } else {
                         lastError = error;
