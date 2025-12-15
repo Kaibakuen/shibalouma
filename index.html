@@ -445,7 +445,7 @@
 
         // [Start] Gemini API
         /**
-         * 呼叫 Gemini API (使用前端硬編碼的金鑰)
+         * 呼叫 Gemini API (使用 Canvas 內建的 API Key)
          */
         const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
             
@@ -462,7 +462,7 @@
 
             for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    // 修正：直接呼叫 FINAL_GEMINI_ENDPOINT (已包含金鑰)
+                    // 修正：直接呼叫 Canvas 可用的終端點，並使用硬編碼的 GEMINI_API_KEY
                     const response = await fetch(FINAL_GEMINI_ENDPOINT, { 
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -470,26 +470,12 @@
                     });
 
                     if (!response.ok) {
-                        const status = response.status;
-                        let errorMessage = `連線失敗 (狀態碼: ${status})。`;
-                        let errorBody = {};
-
                         try {
-                            errorBody = await response.json();
-                            if (errorBody && errorBody.error) {
-                                errorMessage = `API 錯誤: ${status} - ${errorBody.error.message || '未知錯誤碼。'} (通常是金鑰/網域限制)`
-                            }
+                            const errorBody = await response.json();
+                            throw new Error(`API 錯誤: ${response.status} - ${errorBody.error?.message || '未知錯誤碼。'}`);
                         } catch (e) {
-                            // Non-JSON response (e.g., 403 Forbidden plain text)
-                            const rawText = await response.text();
-                            errorMessage = `API 錯誤: ${status} - (非 JSON 響應)。原始文本: ${rawText.substring(0, 50)}...`;
+                            throw new Error(`連線失敗 (狀態碼: ${response.status})。`);
                         }
-
-                        // 輸出詳細診斷信息到 Console
-                        console.error("Gemini API 原始錯誤響應 - 狀態:", status);
-                        console.error("Gemini API 原始錯誤響應 - 主體:", errorBody || "無法解析");
-
-                        throw new Error(errorMessage);
                     }
                     
                     const result = await response.json();
@@ -506,7 +492,7 @@
                 } catch (error) {
                     lastError = error;
                     
-                    if (error instanceof TypeError && !String(error).includes('API')) {
+                    if (error instanceof TypeError) {
                         lastError = new Error(`網路連線失敗 (TypeError)：請確認網路或 API 終端點配置。`);
                     } else {
                         lastError = error;
@@ -674,4 +660,467 @@
                     return;
                 }
 
-                const origin = { lat: parseFloat(itinerary
+                const origin = { lat: parseFloat(itinerary[0].lat), lng: parseFloat(itinerary[0].lng) };
+                const destination = { lat: parseFloat(itinerary[itinerary.length - 1].lat), lng: parseFloat(itinerary[itinerary.length - 1].lng) };
+                
+                const waypoints = itinerary.slice(1, -1).map(item => ({
+                    location: { lat: parseFloat(item.lat), lng: parseFloat(item.lng) },
+                    stopover: true 
+                }));
+
+                const map = new google.maps.Map(mapDiv, {
+                    zoom: 11,
+                    center: origin, 
+                    mapId: "DEMO_MAP_ID" 
+                });
+                directionsRenderer.setMap(map);
+
+                // Start Marker (A)
+                new google.maps.Marker({
+                    position: origin,
+                    map: map,
+                    title: itinerary[0].name,
+                    label: 'A',
+                    icon: { url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png' }
+                });
+
+                // End Marker (Z)
+                new google.maps.Marker({
+                    position: destination,
+                    map: map,
+                    title: itinerary[itinerary.length - 1].name,
+                    label: 'Z',
+                    icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }
+                });
+
+                directionsService.route({
+                    origin: origin,
+                    destination: destination,
+                    waypoints: waypoints,
+                    optimizeWaypoints: true, 
+                    travelMode: google.maps.TravelMode.DRIVING 
+                }, (response, status) => {
+                    if (status === 'OK') {
+                        directionsRenderer.setDirections(response);
+                        mapTitleElement.textContent = `規劃路線: ${mapTitle}`;
+                    } else {
+                        mapTitleElement.textContent = `路線計算失敗: ${status}`;
+                        console.error('Directions request failed due to ' + status);
+                    }
+                });
+
+            } catch (error) {
+                mapTitleElement.textContent = `地圖載入失敗: ${error.message}`;
+                console.error("Google Maps failed to load or initialize:", error);
+            }
+        };
+        
+        const hideMap = () => {
+            document.getElementById('map-modal').style.display = 'none';
+        };
+        // [End] Map Logic
+
+        // [Start] Main Logic
+        const createQuizMessage = (questionData, currentStep) => {
+            const q = questionData.text;
+            const options = questionData.options;
+            
+            let quizHTML = `
+                <div class="text-xs text-gray-500 mb-2">客途 AI 旅伴 - 旅遊偏好問卷 (第 ${currentStep}/${TOTAL_QUIZ_STEPS} 題)</div>
+                <div class="text-lg font-bold text-blue-900 mb-3">${q}</div>
+                <div class="space-y-2">
+            `;
+
+            options.forEach(option => {
+                const nextStep = currentStep + 1;
+                const postbackData = `action=next_quiz&step=${nextStep}&val=${option.val}`;
+                
+                quizHTML += `
+                    <button onclick="handlePostback('${postbackData}')" 
+                            class="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm transition duration-150 text-gray-800">
+                        ${option.label}
+                    </button>
+                `;
+            });
+
+            quizHTML += `</div>`;
+            
+            addMessage('quiz', quizHTML, true);
+        };
+
+        const createItineraryCard = (itineraryJson) => {
+            let itineraryItemsHTML = '';
+            itineraryJson.itinerary.forEach((item, index) => {
+                itineraryItemsHTML += `
+                    <div class="py-2 border-b border-gray-100 last:border-b-0">
+                        <div class="flex items-center text-sm font-semibold text-gray-700 mb-1">
+                            <i data-lucide="clock" class="w-4 h-4 mr-2 text-amber-500"></i>
+                            ${item.time} - ${item.name}
+                        </div>
+                        <p class="text-xs text-gray-500 pl-6">${item.description}</p>
+                        <a href="${item.location_url}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800 transition duration-150 pl-6 underline flex items-center mt-1">
+                            <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i> Google 地圖
+                        </a>
+                        <!-- 新增：Gemini 深度解說按鈕 -->
+                        <button onclick="handleDeepDive('${item.name}')" class="mt-2 ml-6 text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition duration-150">
+                            ✨ 景點深度解說
+                        </button>
+                    </div>
+                `;
+            });
+            
+            // 處理 JSON 格式，以便傳遞給 showItineraryMap 函數
+            const itineraryDataString = JSON.stringify(itineraryJson.itinerary.map(item => ({
+                name: item.name,
+                lat: item.lat,
+                lng: item.lng
+            })));
+            const mapTitle = itineraryJson.title;
+
+
+            const cardHTML = `
+                <div class="flex-card w-full max-w-sm text-gray-800">
+                    <div class="p-3 color-primary text-white rounded-t-xl">
+                        <div class="text-xl font-bold">${itineraryJson.title}</div>
+                        <div class="text-xs opacity-80 mt-1">主題: ${itineraryJson.theme}</div>
+                    </div>
+                    
+                    <div class="p-4 space-y-3">
+                        <div class="border-b pb-3">
+                            <div class="text-xs font-semibold text-blue-900 mb-1">小阿客推薦理由:</div>
+                            <p class="text-sm">${itineraryJson.recommendation_reason}</p>
+                        </div>
+                        
+                        <div class="text-sm font-bold mt-3">【詳細行程 - 台三線客庄】</div>
+                        ${itineraryItemsHTML}
+
+                        <div class="text-right text-xs text-blue-600 font-medium pt-2">
+                            低碳估算（參考值）: ${itineraryJson.carbon_footprint_estimate}
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col p-3 border-t bg-gray-50 space-y-2">
+                        <!-- 地圖按鈕 (呼叫新的路線繪製功能) -->
+                        <button onclick="showItineraryMap('${itineraryDataString.replace(/'/g, "\\'")}', '${mapTitle}')" class="w-full text-center py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition duration-200 shadow-md">
+                            <i data-lucide="map" class="w-4 h-4 inline-block mr-1"></i> 查看完整路線地圖
+                        </button>
+                        <!-- 雨天備案按鈕 -->
+                        <button onclick="handlePostback('action=get_rain_plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
+                            <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
+                        </button>
+                    </div>
+                </div>
+            `;
+            addMessage('bot', cardHTML, true);
+        };
+        
+        const generatePersonalityMessage = async (finalPrefs) => {
+            const score = (dim) => finalPrefs[dim] || 0;
+
+            let mainPersonality = ""; 
+            let traitDescription = ""; 
+            let itineraryFocus = ""; 
+            
+            const outdoorScore = score('Outdoor') - score('Indoor');
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5); 
+            const focusScore = score('CultureDepth') * 2 + score('Culture');
+            
+            if (focusScore > 8 && outdoorScore > 0) {
+                mainPersonality = "精緻探索家 (The Cultured Explorer)";
+                traitDescription = "您的基因：**內斂、規劃、知識享受、探索**。您重視旅程的知識性與效率，喜歡深入挖掘文化，並願意花費時間與精力去探索獨特景點。";
+                itineraryFocus = "【精緻探索家】您需要結合**歷史古蹟深度導覽**與**高質量戶外體驗**。您的行程應包含明確的學習目標和高效率的移動，專注於質量而非數量。";
+            } else if (outdoorScore < -4 && score('Pace') > 4) {
+                mainPersonality = "悠活度假客 (The Relaxed Retreat)";
+                traitDescription = "您的基因：**隨和、悠閒、物質享受、內斂**。您追求無壓力的放鬆與舒適度，住宿與美食的品質對您很重要。";
+                itineraryFocus = "【悠活度假客】您應選擇主打**高品質客庄旅宿**、**在地客家慢食**、**室內手作體驗**。您的旅行哲學是『慢下來，享受當下』。";
+            } else if (outdoorScore > 4 && paceScore < -2) {
+                mainPersonality = "行動拓荒者 (The Action Pioneer)";
+                traitDescription = "您的基因：**外向、緊湊、效率、開拓**。您擁有高強度的行動力，追求在有限的時間內走訪最多的戶外景點，行程通常高效且充滿挑戰性。";
+                itineraryFocus = "【行動拓荒者】您需要緊湊且高強度的行程。建議行程：**挑戰型山區健行**、**長距離單車騎行**，將台三線的自然景點一網打盡。";
+            } else {
+                mainPersonality = "平和優遊家 (The Harmonious Wanderer)";
+                traitDescription = "您的基因：**隨和、平衡、共享、無爭**。您希望旅程平順、舒適，樂於配合旅伴的需求。重視低風險、親子/長者友善的環境。";
+                itineraryFocus = "【平和優遊家】您適合選擇**交通便利、配套設施完善**的景點（如大型客家文化園區、易達老街），確保行程流暢且所有旅伴都能舒適參與。";
+            }
+            
+            let finalMessageContent = `
+                <div class="p-3 w-full">
+                    <div class="text-xl font-bold text-blue-900 border-b-2 border-blue-900 pb-2 mb-3 text-center">您的旅型人格揭曉！</div>
+                    <div class="text-3xl font-extrabold text-amber-600 mb-2 text-center">${mainPersonality}</div>
+                    <div class="text-sm text-gray-700 font-medium mb-4 text-center">${traitDescription}</div>
+                    
+                    <div class="mt-4 pt-3 border-t border-gray-100">
+                        <div class="text-sm font-semibold text-blue-900 mb-1">小阿客的客製化行程建議：</div>
+                        <p class="text-sm text-gray-600">${itineraryFocus}</p>
+                        <p class="mt-3 text-xs text-blue-600">現在請輸入您的旅遊需求 (例如：『新竹峨眉，戶外活動』 或 『想去苗栗南庄，慢活主題』)，小阿客會立即為您規劃**最客製化**的台三線客庄行程！</p>
+                    </div>
+                </div>
+            `;
+            
+            addMessage('quiz', finalMessageContent, true);
+        };
+        
+        const generateHakkaItinerary = (query, prefs) => {
+            // 這個函式目前在客戶端模擬行程生成的回應。在實際應用中，這個邏輯會被發送到後端，由 Gemini 根據 prefs 和 query 動態生成。
+            const score = (dim) => prefs[dim] || 0;
+            const isOutdoor = score('Outdoor') > score('Indoor');
+            const isPace = score('Pace') > 0;
+            const isCultureDepth = score('CultureDepth') > 0;
+
+            const regionMatch = query.includes('新竹') ? '新竹' : query.includes('苗栗') ? '苗栗' : '桃園';
+            
+            let filteredAttractions = HAKKA_ATTRACTIONS.filter(a => a.region === regionMatch);
+            
+            if (isOutdoor) {
+                filteredAttractions = filteredAttractions.filter(a => a.theme.includes('Outdoor'));
+            } else if (isCultureDepth) {
+                filteredAttractions = filteredAttractions.filter(a => a.theme.includes('CultureDepth'));
+            }
+            if (filteredAttractions.length < 2) {
+                 filteredAttractions = HAKKA_ATTRACTIONS.filter(a => a.region === regionMatch);
+            }
+
+            const itinerary = [
+                {
+                    time: "09:00",
+                    name: filteredAttractions[0].name,
+                    description: isPace ? "慢活啟動，享受早晨的寧靜。" : "快速抵達並開始深度導覽。",
+                    location_url: filteredAttractions[0].map_url,
+                    lat: filteredAttractions[0].lat,
+                    lng: filteredAttractions[0].lng,
+                },
+                {
+                    time: "12:00",
+                    name: "客家在地美食 (午餐)",
+                    description: "推薦您品嚐傳統擂茶或粄條。",
+                    location_url: "https://maps.app.goo.gl/g6zXJ4r5eQ7c3B9q7", // 模擬美食地點
+                    lat: 24.6940, lng: 121.0500,
+                },
+                {
+                    time: "14:00",
+                    name: filteredAttractions[filteredAttractions.length - 1].name,
+                    description: isCultureDepth ? "下午進行文化體驗，如手作 DIY 或參觀宗祠。" : "輕鬆騎行或散步於戶外美景。",
+                    location_url: filteredAttractions[filteredAttractions.length - 1].map_url,
+                    lat: filteredAttractions[filteredAttractions.length - 1].lat,
+                    lng: filteredAttractions[filteredAttractions.length - 1].lng,
+                },
+            ];
+
+            const theme = isPace ? "慢活悠遊" : "高效探索";
+            
+            return {
+                title: `${regionMatch} 客庄一日遊：${theme} 主題`,
+                theme: theme,
+                recommendation_reason: `根據您的 **${generatePersonality(prefs).mainPersonality}** 人格，我們專注於 ${isCultureDepth ? '深度文化體驗' : '自然環境與戶外休閒'}，行程節奏 ${isPace ? '舒適緩慢' : '緊湊且高效'}。`,
+                carbon_footprint_estimate: "低碳中高 (參考值)",
+                itinerary: itinerary
+            };
+        };
+
+        const generatePersonality = (finalPrefs) => {
+            const score = (dim) => finalPrefs[dim] || 0;
+            const outdoorScore = score('Outdoor') - score('Indoor');
+            const focusScore = score('CultureDepth') * 2 + score('Culture');
+            
+            if (focusScore > 8 && outdoorScore > 0) return { mainPersonality: "精緻探索家" };
+            if (outdoorScore < -4 && score('Pace') > 4) return { mainPersonality: "悠活度假客" };
+            if (outdoorScore > 4) return { mainPersonality: "行動拓荒者" };
+            return { mainPersonality: "平和優遊家" };
+        };
+
+        // [End] Main Logic
+
+        // [Start] Event Handlers
+        const handlePostback = async (data) => {
+            const params = new URLSearchParams(data);
+            const action = params.get('action');
+
+            if (action === 'next_quiz') {
+                const nextStep = parseInt(params.get('step'));
+                const valString = params.get('val');
+                
+                updatePreferenceVector(valString);
+                currentQuizStep = nextStep; 
+
+                if (nextStep <= TOTAL_QUIZ_STEPS) {
+                    const quizData = QUIZ_QUESTIONS[nextStep];
+                    createQuizMessage(quizData, nextStep);
+                    saveStateToLocalStorage();
+                } else {
+                    currentQuizStep = TOTAL_QUIZ_STEPS;
+                    saveStateToLocalStorage();
+                    await generatePersonalityMessage(currentPreferences);
+                }
+
+            } else if (action === 'get_rain_plan') {
+                addMessage('bot', '好的，小阿客收到雨天備案請求！若遇下雨，建議將戶外步道改為參觀附近的**客家文化會館**或**室內DIY體驗**（如米食製作）。');
+            }
+        };
+
+        const handleMessage = async (text) => {
+            
+            addMessage('user', text);
+
+            const isRestart = text === "重新測驗" || text === "開始問卷";
+            const isFinished = currentQuizStep >= TOTAL_QUIZ_STEPS;
+            const isPlanning = text.includes('規劃行程') || text.includes('行程') || text.includes('顯示結果');
+            
+            if (isRestart) {
+                currentQuizStep = 0;
+                currentPreferences = { ...PREFERENCE_DIMENSIONS };
+                saveStateToLocalStorage();
+            }
+
+            if (currentQuizStep === 0) {
+                if (isPlanning && !isRestart) {
+                    addMessage('bot', "小阿客了解您的需求！請先點擊「開始問卷」按鈕，完成 **10 題客庄旅遊問卷**，以獲得最客製化的行程建議。");
+                    return; 
+                }
+                const quizData = QUIZ_QUESTIONS[1];
+                createQuizMessage(quizData, 1);
+                currentQuizStep = 1;
+                saveStateToLocalStorage();
+                return;
+            }
+
+            if (isPlanning && isFinished) {
+                try {
+                    const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
+                    
+                    // Call proxy to generate itinerary (simulated on client for now)
+                    // 實際應用中，這個延遲將被實際的 callGeminiAPI(itinerary generation)取代
+                    setTimeout(() => {
+                        // 這裡不需要檢查 AI Service Ready，因為這是客戶端模擬的行程
+                        const itineraryJson = generateHakkaItinerary(text, currentPreferences);
+                        // 移除載入中的訊息，並顯示行程卡
+                        messagesContainer.removeChild(loadingMessageDiv.parentElement);
+                        createItineraryCard(itineraryJson);
+                    }, 1500);
+
+                } catch (e) {
+                    addMessage('bot', `對不起，行程規劃系統出現錯誤: ${e.message}`);
+                    console.error("行程規劃錯誤:", e);
+                }
+            } else if (isFinished || (currentQuizStep > 0 && !isPlanning)) {
+                // 這是處理一般文化問答的區塊
+                if (text.length > 5 && !text.includes('顯示結果')) {
+                     await handleCultureQA(text);
+                } else if (!isFinished) {
+                     addMessage('bot', `請先回答目前的第 ${currentQuizStep} 題，才能繼續喔！`);
+                }
+            }
+        };
+
+        const sendMessage = () => {
+            const text = userInput.value.trim();
+            if (text) {
+                handleMessage(text);
+                userInput.value = ''; 
+            }
+        };
+        // [End] Event Handlers
+
+        // [Start] App Initialization
+        const generateAnonUserId = () => {
+            return 'anon_' + Math.random().toString(36).substring(2, 15);
+        };
+        
+        const startApp = () => {
+            const splash = document.getElementById('splash-screen');
+            const app = document.getElementById('app-container');
+            
+            splash.style.animation = 'fadeOut 0.5s ease-in forwards';
+            
+            setTimeout(() => {
+                splash.style.display = 'none';
+                app.style.display = 'flex';
+                app.style.animation = 'fadeIn 0.5s ease-out';
+                
+                // 檢查是否已完成問卷
+                let initialBotMessage = `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
+                                         我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>`;
+                
+                if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
+                    initialBotMessage += `歡迎回來！您已完成問卷，現在請輸入您的旅遊需求或文化問題。`;
+                } else if (currentQuizStep > 0) {
+                    initialBotMessage += `您上次停在第 ${currentQuizStep} 題。請點擊「開始問卷」繼續完成。`;
+                } else {
+                    initialBotMessage += `為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`;
+                }
+                
+                addMessage('bot', initialBotMessage);
+                
+                userIdDisplay.innerHTML = generateAnonUserId(); 
+                displayApiKeyStatus(); 
+                
+                if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
+                    setTimeout(async () => {
+                          await generatePersonalityMessage(currentPreferences);
+                    }, 500);
+                } else {
+                    setTimeout(() => {
+                        const quizStartButton = `
+                            <div class="w-full text-center">
+                                <button onclick="handleMessage('重新測驗')" class="color-accent hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm transition duration-200 shadow-md">
+                                    點我開始問卷！
+                                </button>
+                            </div>
+                        `;
+                        addMessage('quiz', quizStartButton, true);
+                    }, 500);
+                }
+            }, 500); 
+        };
+        
+        const displayApiKeyStatus = () => {
+            // 檢查 API 金鑰是否已設定
+            const isGeminiSet = GEMINI_API_KEY && GEMINI_API_KEY.length > 5;
+            const isMapsSet = GOOGLE_MAPS_API_KEY && GOOGLE_MAPS_API_KEY.length > 5;
+            const isMotcSet = MOTC_APP_ID && MOTC_APP_KEY;
+
+            const updateStatus = (id, isConnected, name) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+
+                if (isConnected) {
+                     element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已連線)`;
+                } else {
+                     element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (未連線或需設定)`;
+                }
+            };
+
+            updateStatus('status-gemini', isGeminiSet, 'Gemini AI');
+            updateStatus('status-maps', isMapsSet, 'Google Maps');
+            updateStatus('status-motc', isMotcSet, 'MOTC 交通');
+            
+            if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
+        };
+
+        // 綁定全域函式
+        window.handleMessage = handleMessage;
+        window.handlePostback = handlePostback;
+        window.sendMessage = sendMessage;
+        window.handleDeepDive = handleDeepDive; 
+        window.startApp = startApp; 
+        window.showItineraryMap = showItineraryMap; 
+        window.hideMap = hideMap;
+
+
+        // --- 9. 網頁載入初始化 ---
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            loadStateFromLocalStorage();
+
+            document.getElementById('start-button').addEventListener('click', startApp);
+
+            if (typeof lucide !== 'undefined' && lucide.createIcons) {
+                lucide.createIcons();
+            }
+            
+            displayApiKeyStatus();
+        });
+
+    </script>
+</body>
+</html>
