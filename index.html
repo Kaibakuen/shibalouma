@@ -49,7 +49,7 @@
             z-index: 1000;
             animation: fadeIn 0.5s ease-out;
         }
-        #splash-image-container { /* 影片容器更名 */
+        #splash-video-container {
             width: 90%;
             max-width: 300px;
             margin-bottom: 2rem;
@@ -57,11 +57,10 @@
             overflow: hidden;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
         }
-        #splash-image { /* 影片替換為圖片 */
+        #splash-video {
             display: block;
             width: 100%;
             height: auto;
-            object-fit: cover;
         }
         
         /* ------------------------ */
@@ -145,15 +144,19 @@
             }
         }
         
-        /* 吉祥物圖片調整 */
-        #mascot-image {
+        /* 吉祥物影片調整 */
+        #mascot-video {
             width: 100%;
             height: auto;
             max-height: 250px; 
             object-fit: cover;
             border-radius: 8px;
         }
-        /* 移除影片相關 CSS */
+        /* 隱藏原生 video 控件 */
+        #splash-video::-webkit-media-controls,
+        #mascot-video::-webkit-media-controls { display: none !important; }
+        #splash-video,
+        #mascot-video { pointer-events: none; }
     </style>
 </head>
 <body class="p-0 flex flex-col items-center justify-center min-h-screen">
@@ -163,9 +166,12 @@
         <h1 class="text-4xl font-extrabold mb-4 animate-pulse">客途 AI 旅伴</h1>
         <p class="text-lg opacity-80 mb-8">台三線客庄生態博物館</p>
 
-        <!-- 修正點：使用佔位圖片取代外部影片 -->
-        <div id="splash-image-container">
-            <img id="splash-image" src="https://placehold.co/300x200/103561/ffffff?text=小阿客吉祥物" alt="吉祥物圖片" class="w-full h-auto rounded-lg"/>
+        <!-- 修正點：還原影片連結 -->
+        <div id="splash-video-container">
+            <video id="splash-video" autoplay loop muted playsinline>
+                <source src="asset/video/1213.mp4" type="video/mp4">
+                您的瀏覽器不支援影片標籤。
+            </video>
         </div>
 
         <button id="start-button" 
@@ -208,10 +214,13 @@
                     </div>
                 </div>
                 
-                <!-- 修正點：使用佔位圖片取代外部影片 -->
+                <!-- 修正點：還原影片連結 -->
                 <div class="text-center">
                     <p class="text-xs opacity-70 mb-2">吉祥物：小阿客</p>
-                    <img id="mascot-image" src="https://placehold.co/300x200/103561/ffffff?text=小阿客吉祥物" alt="吉祥物圖片" class="w-full h-auto rounded-lg"/>
+                    <video id="mascot-video" autoplay loop muted playsinline>
+                        <source src="asset/video/1213.mp4" type="video/mp4">
+                        您的瀏覽器不支援影片標籤。
+                    </video>
                 </div>
             </div>
 
@@ -273,17 +282,13 @@
         // ----------------------------------------------------
         // ❗❗❗ 第 0 步：設定 API 連線 ❗❗❗
         // ----------------------------------------------------
-        // [1] Gemini API 終端點 (用於 Canvas 測試 - 繞過您部署的 Cloud Run 服務)
-        // 這是 Google Generative Language API 的終端點，Canvas 會自動填入金鑰
-        const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=";
-        const CLOUD_RUN_BASE_URL = GEMINI_API_ENDPOINT; // 假裝這是您的 URL
-        
+        // [1] Cloud Run 代理服務網址 (用於 Gemini/MOTC - 後端已部署成功)
+        const CLOUD_RUN_BASE_URL = "https://shiba-732853956066.asia-east1.run.app"; 
         // [2] Google Maps 金鑰 (唯一需要留在前端的公開金鑰 - 必須由您填寫)
         const GOOGLE_MAPS_API_KEY = "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo"; 
         // ----------------------------------------------------
         
-        // PROXY_API_URL 現在直接指向 Gemini API
-        const PROXY_API_URL = GEMINI_API_ENDPOINT;
+        const PROXY_API_URL = `${CLOUD_RUN_BASE_URL}/api/gemini-proxy`;
         
         // --- 核心變數和函式定義 ---
 
@@ -303,8 +308,11 @@
         let directionsRenderer; 
         let isMapApiLoaded = false;
         
-        // 移除不必要的 isAiServiceReady 函數，因為我們現在直接使用工作中的 API
-        // const isAiServiceReady = () => { /* ... */ };
+        // 檢查 AI 服務是否已配置 (假設您在部署時會填寫正確的 URL)
+        const isAiServiceReady = () => {
+            // 只要 URL 格式正確，我們就假設它已經部署
+            return CLOUD_RUN_BASE_URL.startsWith("https://") && CLOUD_RUN_BASE_URL.length > 50; 
+        };
 
         // [Start] Local Storage Ops
         const loadStateFromLocalStorage = () => {
@@ -411,17 +419,21 @@
 
         // [Start] Gemini API
         /**
-         * 呼叫 Gemini API (直接呼叫 Google Generative Language API)
+         * 呼叫 Gemini API (透過 Cloud Run 後端代理)
          */
         const callGeminiAPI = async (userQuery, systemPrompt, useGrounding = true) => {
             
-            // 修正點：使用直接 API Payload 格式
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-                tools: useGrounding ? [{ "google_search": {} }] : undefined,
-            };
+            if (!CLOUD_RUN_BASE_URL.startsWith("https://")) {
+                 throw new Error("Cloud Run 網址未設定或格式錯誤。");
+            }
 
+            // 確保 AI 服務連線檢查只在部署後才生效，在這裡直接假設部署者會確保連線。
+            
+            const payload = {
+                user_query: userQuery,
+                system_prompt: systemPrompt,
+                use_grounding: useGrounding,
+            };
 
             // 實作指數退避 (Exponential Backoff) 重試機制
             const MAX_RETRIES = 3;
@@ -429,7 +441,6 @@
 
             for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    // PROXY_API_URL 現在是直接的 Gemini API 終端點
                     const response = await fetch(PROXY_API_URL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -437,11 +448,13 @@
                     });
 
                     if (!response.ok) {
+                        // Attempt to parse JSON error message
                         try {
                             const errorBody = await response.json();
-                            throw new Error(`API 錯誤: ${response.status} - ${errorBody.error?.message || '未知錯誤碼。'}`);
+                            throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '後端回傳錯誤碼。'}`);
                         } catch (e) {
-                            throw new Error(`連線失敗 (狀態碼: ${response.status})。`);
+                            // If JSON parsing fails (e.g., 502/503 HTML error page from load balancer)
+                            throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
                         }
                     }
                     
@@ -459,9 +472,9 @@
                 } catch (error) {
                     lastError = error;
                     
-                    // 修正點：針對 Failed to fetch (網路錯誤) 提供更明確的提示
+                    // 修正點：針對 Failed to fetch (網路錯誤) 提供更明確的提示，以便除錯
                     if (error instanceof TypeError) {
-                        lastError = new Error(`網路連線失敗 (TypeError)：請確認網路或 API 終端點配置。`);
+                        lastError = new Error(`網路連線失敗 (TypeError)：請確認 Cloud Run 代理服務網址 [${CLOUD_RUN_BASE_URL}] 是否正確且已啟動。`);
                     } else {
                         lastError = error;
                     }
@@ -480,6 +493,8 @@
             addMessage('user', `✨ 請給我景點【${attractionName}】的深度解說。`);
             
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在透過網路查詢【${attractionName}】的歷史文化背景...`);
+            
+            // 修正點：移除 isAiServiceReady 警告，直接嘗試連線。
             
             const systemPrompt = "你是一位專門提供台灣客庄歷史、文化和旅遊資訊的專家。請根據 Google Search 提供的資訊，為用戶生成一段約 150 字的深度解說，內容需包含歷史淵源、客家文化連結以及旅遊亮點。請使用繁體中文。";
             const userQuery = `景點名稱: ${attractionName}. 請詳細說明這個景點的歷史和客家文化意義。`;
@@ -521,6 +536,8 @@
             // 處理一般文化問答，並連結到內建知識庫
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在思考您的客庄文化問題...`);
             
+            // 修正點：移除 isAiServiceReady 警告，直接嘗試連線。
+
             // 將本地數據庫內容注入 System Prompt
             const systemPrompt = `
                 你是一位專門回答台灣客家文化、歷史、習俗和美食的專家。
@@ -1043,7 +1060,7 @@
         
         const displayApiKeyStatus = () => {
             // 檢查 Cloud Run 網址和 Google Maps 金鑰
-            // 修正點：狀態檢查現在假設 Gemini 是連線的，因為我們正在使用可連線的終端點
+            const cloudRunSet = CLOUD_RUN_BASE_URL.startsWith("https://") && CLOUD_RUN_BASE_URL.length > 50;
             const mapsKey = GOOGLE_MAPS_API_KEY !== "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo" && GOOGLE_MAPS_API_KEY.length > 5;
             
             const updateStatus = (id, isConnected, name) => {
@@ -1057,10 +1074,9 @@
                 }
             };
 
-            // 修正點：現在將 Gemini/MOTC 標記為已連線，因為我們正在使用可連線的 API
-            updateStatus('status-gemini', true, 'Gemini AI');
+            updateStatus('status-gemini', cloudRunSet, 'Gemini AI');
             updateStatus('status-maps', mapsKey, 'Google Maps');
-            updateStatus('status-motc', true, 'MOTC 交通 (AI 模擬)');
+            updateStatus('status-motc', cloudRunSet, 'MOTC 交通');
             
             if (typeof lucide !== 'undefined' && lucide.createIcons) { lucide.createIcons(); }
         };
