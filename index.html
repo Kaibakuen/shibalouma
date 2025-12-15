@@ -157,6 +157,33 @@
         #mascot-video::-webkit-media-controls { display: none !important; }
         #splash-video,
         #mascot-video { pointer-events: none; }
+
+        /* 地圖模態視窗樣式 */
+        #map-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        #map-container {
+            width: 90%;
+            max-width: 800px;
+            height: 80%;
+            background-color: white;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        #map {
+            width: 100%;
+            height: calc(100% - 40px); /* 留出關閉按鈕空間 */
+        }
     </style>
 </head>
 <body class="p-0 flex flex-col items-center justify-center min-h-screen">
@@ -166,8 +193,8 @@
         <h1 class="text-4xl font-extrabold mb-4 animate-pulse">客途 AI 旅伴</h1>
         <p class="text-lg opacity-80 mb-8">台三線客庄生態博物館</p>
 
-        <!-- 修正點：還原影片連結 -->
         <div id="splash-video-container">
+            <!-- 吉祥物揮手影片 -->
             <video id="splash-video" autoplay loop muted playsinline>
                 <source src="asset/video/1213.mp4" type="video/mp4">
                 您的瀏覽器不支援影片標籤。
@@ -214,7 +241,7 @@
                     </div>
                 </div>
                 
-                <!-- 修正點：還原影片連結 -->
+                <!-- 吉祥物動畫 (影片，重複一次，確保與splash video不同ID) -->
                 <div class="text-center">
                     <p class="text-xs opacity-70 mb-2">吉祥物：小阿客</p>
                     <video id="mascot-video" autoplay loop muted playsinline>
@@ -289,7 +316,9 @@
         // ----------------------------------------------------
         
         const PROXY_API_URL = `${CLOUD_RUN_BASE_URL}/api/gemini-proxy`;
-        
+        // 其他變數保持不變...
+
+
         // --- 核心變數和函式定義 ---
 
         const messagesContainer = document.getElementById('messages');
@@ -308,12 +337,6 @@
         let directionsRenderer; 
         let isMapApiLoaded = false;
         
-        // 檢查 AI 服務是否已配置 (假設您在部署時會填寫正確的 URL)
-        const isAiServiceReady = () => {
-            // 只要 URL 格式正確，我們就假設它已經部署
-            return CLOUD_RUN_BASE_URL.startsWith("https://") && CLOUD_RUN_BASE_URL.length > 50; 
-        };
-
         // [Start] Local Storage Ops
         const loadStateFromLocalStorage = () => {
             try {
@@ -426,8 +449,6 @@
             if (!CLOUD_RUN_BASE_URL.startsWith("https://")) {
                  throw new Error("Cloud Run 網址未設定或格式錯誤。");
             }
-
-            // 確保 AI 服務連線檢查只在部署後才生效，在這裡直接假設部署者會確保連線。
             
             const payload = {
                 user_query: userQuery,
@@ -435,66 +456,39 @@
                 use_grounding: useGrounding,
             };
 
-            // 實作指數退避 (Exponential Backoff) 重試機制
-            const MAX_RETRIES = 3;
-            let lastError = null;
+            const response = await fetch(PROXY_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-            for (let i = 0; i < MAX_RETRIES; i++) {
+            if (!response.ok) {
                 try {
-                    const response = await fetch(PROXY_API_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    if (!response.ok) {
-                        // Attempt to parse JSON error message
-                        try {
-                            const errorBody = await response.json();
-                            throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '後端回傳錯誤碼。'}`);
-                        } catch (e) {
-                            // If JSON parsing fails (e.g., 502/503 HTML error page from load balancer)
-                            throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
-                        }
-                    }
-                    
-                    const result = await response.json();
-                    const candidate = result.candidates?.[0];
-                    const text = candidate?.content?.parts?.[0]?.text;
-                    let sources = [];
-                    
-                    const groundingMetadata = candidate?.groundingMetadata;
-                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
-                        sources = groundingMetadata.groundingAttributions.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }));
-                    }
-                    
-                    return { text, sources };
-                } catch (error) {
-                    lastError = error;
-                    
-                    // 修正點：針對 Failed to fetch (網路錯誤) 提供更明確的提示，以便除錯
-                    if (error instanceof TypeError) {
-                        lastError = new Error(`網路連線失敗 (TypeError)：請確認 Cloud Run 代理服務網址 [${CLOUD_RUN_BASE_URL}] 是否正確且已啟動。`);
-                    } else {
-                        lastError = error;
-                    }
-
-                    // 如果不是最後一次嘗試，等待並重試 (1s, 2s, 4s)
-                    if (i < MAX_RETRIES - 1) {
-                        const delay = Math.pow(2, i) * 1000;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                    }
+                    const errorBody = await response.json();
+                    throw new Error(`代理服務錯誤: ${response.status} - ${errorBody.error || '無法連接到 Cloud Run 代理服務。'}`);
+                } catch (e) {
+                     // 這邊是處理 CORS 或後端完全未啟動的情況
+                     throw new Error(`連線失敗 (狀態碼: ${response.status})。請檢查 Cloud Run 紀錄檔，確認 app.py 是否啟動。`);
                 }
             }
-            throw lastError; // 拋出最後一次錯誤
+            
+            const result = await response.json();
+            const candidate = result.candidates?.[0];
+            const text = candidate?.content?.parts?.[0]?.text;
+            let sources = [];
+            
+            const groundingMetadata = candidate?.groundingMetadata;
+            if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                sources = groundingMetadata.groundingAttributions.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }));
+            }
+            
+            return { text, sources };
         };
 
         const handleDeepDive = async (attractionName) => {
             addMessage('user', `✨ 請給我景點【${attractionName}】的深度解說。`);
             
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在透過網路查詢【${attractionName}】的歷史文化背景...`);
-            
-            // 修正點：移除 isAiServiceReady 警告，直接嘗試連線。
             
             const systemPrompt = "你是一位專門提供台灣客庄歷史、文化和旅遊資訊的專家。請根據 Google Search 提供的資訊，為用戶生成一段約 150 字的深度解說，內容需包含歷史淵源、客家文化連結以及旅遊亮點。請使用繁體中文。";
             const userQuery = `景點名稱: ${attractionName}. 請詳細說明這個景點的歷史和客家文化意義。`;
@@ -533,11 +527,8 @@
         `;
 
         const handleCultureQA = async (userQuery) => {
-            // 處理一般文化問答，並連結到內建知識庫
             const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在思考您的客庄文化問題...`);
             
-            // 修正點：移除 isAiServiceReady 警告，直接嘗試連線。
-
             // 將本地數據庫內容注入 System Prompt
             const systemPrompt = `
                 你是一位專門回答台灣客家文化、歷史、習俗和美食的專家。
@@ -576,48 +567,36 @@
         // [End] Gemini API
 
         // [Start] Map Logic
-        /**
-         * 載入 Google Maps API，並初始化 Directions 服務。
-         * 修正：改用 Promise 模式，確保非同步載入的穩定性。
-         */
         const loadGoogleMapsApi = () => {
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve) => {
                 if (isMapApiLoaded) {
                     resolve();
                     return;
                 }
+                const script = document.createElement('script');
+                
+                // 使用前端公開的金鑰
                 const mapsApiKey = GOOGLE_MAPS_API_KEY;
-
-                // 修正點：放寬對 Canvas 預設金鑰的檢查，避免啟動錯誤
-                if (mapsApiKey === "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo" || !mapsApiKey) {
-                    console.error("Google Maps API Key is missing or default. Maps functionality will be disabled.");
-                    isMapApiLoaded = false;
+                
+                if (mapsApiKey === "請貼上您的 Google Maps 金鑰" || !mapsApiKey) {
+                    console.error("Google Maps API Key is missing. Maps functionality will be disabled.");
+                    isMapApiLoaded = false; 
                     resolve();
                     return;
                 }
-
-                const script = document.createElement('script');
-                script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsApiKey}&libraries=routes`;
+                
+                script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsApiKey}&callback=initMapPlaceholder&libraries=routes`; 
                 script.async = true;
                 script.defer = true;
-
-                script.onload = () => {
+                
+                window.initMapPlaceholder = () => {
                     isMapApiLoaded = true;
-                    // 確保 google.maps 存在
-                    if (typeof google !== 'undefined' && google.maps.DirectionsService) {
-                        directionsService = new google.maps.DirectionsService();
-                        directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
-                        resolve();
-                    } else {
-                        isMapApiLoaded = false;
-                        reject(new Error("Google Maps API loaded, but services not found."));
-                    }
+                    directionsService = new google.maps.DirectionsService();
+                    directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
+                    delete window.initMapPlaceholder;
+                    resolve();
                 };
-
-                script.onerror = () => {
-                    reject(new Error("無法載入 Google Maps API 腳本。請檢查金鑰。"));
-                };
-
+                
                 document.head.appendChild(script);
             });
         };
@@ -638,7 +617,6 @@
                      return;
                 }
                 
-                // 使用修正後的 Promise 載入
                 await loadGoogleMapsApi();
 
                 if (!isMapApiLoaded || typeof google === 'undefined') {
@@ -661,8 +639,7 @@
                 });
                 directionsRenderer.setMap(map);
 
-                // Start Marker (A)
-                new google.maps.Marker({
+                const startMarker = new google.maps.Marker({
                     position: origin,
                     map: map,
                     title: itinerary[0].name,
@@ -670,8 +647,7 @@
                     icon: { url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png' }
                 });
 
-                // End Marker (Z)
-                new google.maps.Marker({
+                const endMarker = new google.maps.Marker({
                     position: destination,
                     map: map,
                     title: itinerary[itinerary.length - 1].name,
@@ -755,7 +731,6 @@
                 `;
             });
             
-            // 處理 JSON 格式，以便傳遞給 showItineraryMap 函數
             const itineraryDataString = JSON.stringify(itineraryJson.itinerary.map(item => ({
                 name: item.name,
                 lat: item.lat,
@@ -791,7 +766,7 @@
                             <i data-lucide="map" class="w-4 h-4 inline-block mr-1"></i> 查看完整路線地圖
                         </button>
                         <!-- 雨天備案按鈕 -->
-                        <button onclick="handlePostback('action=get_rain-plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
+                        <button onclick="handlePostback('action=get_rain_plan')" class="w-full text-center py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition duration-200">
                             <i data-lucide="umbrella" class="w-4 h-4 inline-block mr-1"></i> 雨天備案
                         </button>
                     </div>
@@ -803,12 +778,12 @@
         const generatePersonalityMessage = async (finalPrefs) => {
             const score = (dim) => finalPrefs[dim] || 0;
 
-            let mainPersonality = ""; 
+            let mainPersonality = "";  
             let traitDescription = ""; 
             let itineraryFocus = ""; 
             
             const outdoorScore = score('Outdoor') - score('Indoor');
-            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5); 
+            const paceScore = score('Pace') * 0.5 - (score('CultureDepth') * 0.5 + score('RiskAversion') * 0.5);  
             const focusScore = score('CultureDepth') * 2 + score('Culture');
             
             if (focusScore > 8 && outdoorScore > 0) {
@@ -971,15 +946,12 @@
 
             if (isPlanning && isFinished) {
                 try {
-                    const loadingMessageDiv = addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
+                    addMessage('bot', `<i data-lucide="loader" class="w-4 h-4 mr-1 inline-block animate-spin text-blue-700"></i> 小阿客正在根據您的旅型人格和「${text}」規劃**台三線客庄行程**中... 請稍候。`);
                     
                     // Call proxy to generate itinerary (simulated on client for now)
                     // 實際應用中，這個延遲將被實際的 callGeminiAPI(itinerary generation)取代
                     setTimeout(() => {
-                        // 這裡不需要檢查 AI Service Ready，因為這是客戶端模擬的行程
                         const itineraryJson = generateHakkaItinerary(text, currentPreferences);
-                        // 移除載入中的訊息，並顯示行程卡
-                        messagesContainer.removeChild(loadingMessageDiv.parentElement);
                         createItineraryCard(itineraryJson);
                     }, 1500);
 
@@ -988,7 +960,6 @@
                     console.error("行程規劃錯誤:", e);
                 }
             } else if (isFinished || (currentQuizStep > 0 && !isPlanning)) {
-                // 這是處理一般文化問答的區塊
                 if (text.length > 5 && !text.includes('顯示結果')) {
                      await handleCultureQA(text);
                 } else if (!isFinished) {
@@ -1022,26 +993,17 @@
                 app.style.display = 'flex';
                 app.style.animation = 'fadeIn 0.5s ease-out';
                 
-                // 檢查是否已完成問卷
-                let initialBotMessage = `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
-                                         我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>`;
-                
-                if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
-                    initialBotMessage += `歡迎回來！您已完成問卷，現在請輸入您的旅遊需求或文化問題。`;
-                } else if (currentQuizStep > 0) {
-                    initialBotMessage += `您上次停在第 ${currentQuizStep} 題。請點擊「開始問卷」繼續完成。`;
-                } else {
-                    initialBotMessage += `為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`;
-                }
-                
-                addMessage('bot', initialBotMessage);
+                addMessage('bot', `您好，我是您的客途 AI 旅伴 — **小阿客**！<br>
+                                    我們將探索台三線（浪漫客庄大道）的獨特魅力。<br>
+                                    為了給您最貼心的行程建議，請先點擊下方「開始問卷」。`);
                 
                 userIdDisplay.innerHTML = generateAnonUserId(); 
                 displayApiKeyStatus(); 
+                addMessage('bot', `<i data-lucide="video" class="w-4 h-4 mr-1 inline-block text-blue-700"></i> (提示: 吉祥物動畫 1213.mp4 已在側邊欄載入，歡迎觀賞！)`);
                 
                 if (currentQuizStep >= TOTAL_QUIZ_STEPS) {
                     setTimeout(async () => {
-                          await generatePersonalityMessage(currentPreferences);
+                         await generatePersonalityMessage(currentPreferences);
                     }, 500);
                 } else {
                     setTimeout(() => {
@@ -1060,17 +1022,17 @@
         
         const displayApiKeyStatus = () => {
             // 檢查 Cloud Run 網址和 Google Maps 金鑰
-            const cloudRunSet = CLOUD_RUN_BASE_URL.startsWith("https://") && CLOUD_RUN_BASE_URL.length > 50;
-            const mapsKey = GOOGLE_MAPS_API_KEY !== "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo" && GOOGLE_MAPS_API_KEY.length > 5;
+            const cloudRunSet = CLOUD_RUN_BASE_URL.startsWith("https://");
+            const mapsKey = GOOGLE_MAPS_API_KEY !== "AIzaSyDn4p7dNICj-iFjWEI1rn08FoWNEHHProo";
             
             const updateStatus = (id, isConnected, name) => {
                 const element = document.getElementById(id);
                 if (!element) return;
-
+                
                 if (isConnected) {
                      element.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 mr-1 inline-block text-green-500"></i> ${name} (已連線)`;
                 } else {
-                     element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (未連線或需設定)`;
+                     element.innerHTML = `<i data-lucide="x-circle" class="w-4 h-4 mr-1 inline-block text-red-500"></i> ${name} (請設定金鑰)`;
                 }
             };
 
