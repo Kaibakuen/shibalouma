@@ -12,8 +12,8 @@ app = Flask(__name__)
 
 # --- CORS 修正 ---
 # 允許 GitHub Pages 的 Origin (https://kaibakuen.github.io) 存取 /api/* 端點
+# 這是關鍵，確保前端的請求不會被拒絕。
 CORS(app, resources={r"/api/*": {"origins": "https://kaibakuen.github.io"}}) 
-# 如果您的 GitHub Pages 專案頁面網址為 shibalouma，瀏覽器回報的 Origin 應為 https://kaibakuen.github.io
 # ---
 
 # 載入所有 API 金鑰 (在 Cloud Run 環境變數中設定)
@@ -146,6 +146,7 @@ def generate_map_image():
 
 
 if __name__ == '__main__':
-    # 這是本地運行環境的設定
-    print("Backend Proxy running on http://0.0.0.0:8080")
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    # Cloud Run 啟動最佳實踐：從環境變數中取得 Port
+    port = int(os.environ.get('PORT', 8080))
+    # 運行在 0.0.0.0 讓 Cloud Run 可以正確存取
+    app.run(debug=True, host='0.0.0.0', port=port)
